@@ -35,12 +35,6 @@ npm run build
 
 In Figma, open **Plugins → Development → Import plugin from manifest…**, select `manifest.json`, then run **Sketch → Figma**.
 
-## Import
-
-1. Click or drop one or more `.sketch` files.
-2. Choose whether to include unused Color variables, Layer styles, Text styles, Symbols and Tokens.
-3. Click **Import**.
-
 ## Fidelity and limitations
 
 The importer prioritizes editable Figma objects and retains source metadata for unsupported properties.
@@ -49,22 +43,6 @@ The importer prioritizes editable Figma objects and retains source metadata for 
 - Advanced typography, responsive behavior, library dependencies and some appearance or prototype features remain incomplete.
 - Oversized images use multiple image tiles to preserve source resolution.
 - The visible report focuses on resources. Geometry checks remain in the complete stored audit.
-
-## Development
-
-```sh
-npm run typecheck
-npm test
-npm run build
-```
-
-Acceptance tests use a separately supplied `Test.sketch` file:
-
-```sh
-SKETCH_FIXTURE=/path/to/Test.sketch npm run check
-```
-
-Without that file, acceptance tests are explicitly skipped; unit tests still run. Native Figma checks and Sketch reference renders assess visual fidelity.
 
 ## Documentation
 
