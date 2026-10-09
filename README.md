@@ -5,7 +5,6 @@ Import `.sketch` files into Figma as editable layers, components and design reso
 <p align="center">
   <img src="docs/images/prepare.png" width="32%" alt="Sketch import panel preparing a file with resource switches" />
   <img src="docs/images/importing.png" width="32%" alt="Sketch to Figma import indicator with progress and cancellation" />
-  <img src="docs/images/report.png" width="32%" alt="Import report with resource categories and text style issues" />
 </p>
 
 ## Features
