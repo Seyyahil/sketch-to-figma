@@ -1,0 +1,2356 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sketch → Figma</title>
+    <style>
+      :root {
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-size: 12px;
+  line-height: 1.6;
+  letter-spacing: 0.01em;
+  color-scheme: light;
+  color: var(--figma-color-text, #1e1e1e);
+  background: var(--figma-color-bg, #fff);
+}
+.figma-dark {
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+body {
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+button,
+input {
+  font: inherit;
+  letter-spacing: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--figma-color-border-selected, #0d99ff);
+  outline-offset: 3px;
+}
+main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 28px 24px 20px;
+}
+.content {
+  width: 100%;
+  margin: auto;
+}
+.import-indicator {
+  width: 100%;
+  min-height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+}
+.import-indicator > svg {
+  flex: none;
+}
+.transfer-mark {
+  color: var(--figma-color-icon-secondary, #666);
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.transfer-line {
+  opacity: 0.4;
+  stroke-dasharray: 4 5;
+  animation: transfer-dashes 0.8s linear infinite;
+}
+.transfer-file {
+  opacity: 0;
+  animation: transfer-file 2.8s linear infinite;
+}
+.transfer-file-second {
+  animation-delay: -1.4s;
+}
+.transfer-file-sheet {
+  fill: var(--figma-color-bg, #fff);
+}
+@keyframes transfer-dashes {
+  to {
+    stroke-dashoffset: -9;
+  }
+}
+@keyframes transfer-file {
+  0% {
+    transform: translate(0, 2px);
+    opacity: 0;
+  }
+  12% {
+    transform: translate(12px, -2px);
+    opacity: 1;
+  }
+  50% {
+    transform: translate(48px, -5px);
+    opacity: 1;
+  }
+  88% {
+    transform: translate(84px, 1px);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(96px, -2px);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .transfer-line,
+  .transfer-file {
+    animation: none;
+  }
+  .transfer-file {
+    transform: translateX(24px);
+    opacity: 1;
+  }
+  .transfer-file-second {
+    transform: translateX(72px);
+  }
+}
+.drop {
+  width: 100%;
+  min-height: 140px;
+  border: 1px dashed var(--figma-color-border-strong, #aaa);
+  border-radius: 6px;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 24px 12px;
+}
+.drop svg {
+  color: var(--figma-color-icon-secondary, #666);
+}
+.drop:hover:not(:disabled) {
+  background: var(--figma-color-bg-hover, #f5f5f5);
+}
+.drop.drag {
+  background: var(--figma-color-bg-selected, #e5f4ff);
+  border-color: var(--figma-color-border-selected, #0d99ff);
+}
+.drop:disabled {
+  opacity: 0.5;
+}
+#queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 108px;
+  overflow-y: auto;
+}
+#queue:not(:empty) {
+  margin-top: 12px;
+}
+.file,
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+}
+.file {
+  position: relative;
+}
+.file-reading {
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+}
+.file-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 2px;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--figma-color-bg-secondary, #f5f5f5);
+}
+.file-progress > span {
+  display: block;
+  width: 35%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--figma-color-bg-brand, #0d99ff);
+  animation: file-reading 1.4s ease-in-out infinite;
+}
+@keyframes file-reading {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .file-progress > span {
+    animation: none;
+    transform: none;
+    margin-inline: auto;
+  }
+}
+.file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-state {
+  color: var(--figma-color-text-secondary, #666);
+  font-size: 11px;
+}
+.file-error {
+  color: var(--figma-color-text-danger, #d92d20);
+}
+fieldset {
+  border: 0;
+  padding: 0;
+  margin: 22px 0 0;
+  min-width: 0;
+}
+.option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  cursor: pointer;
+}
+.option input {
+  appearance: none;
+  flex: none;
+  width: 28px;
+  height: 16px;
+  margin: 0;
+  border: 0;
+  border-radius: 9px;
+  background: var(--figma-color-bg-tertiary, #b3b3b3);
+  position: relative;
+  cursor: pointer;
+}
+.option input::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--figma-color-icon-onbrand, #fff);
+  box-shadow: 0 1px 2px #0002;
+}
+.option input:checked {
+  background: var(--figma-color-bg-brand, #0d99ff);
+}
+.option input:checked::after {
+  left: 14px;
+}
+.option input:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+fieldset:disabled .option {
+  color: var(--figma-color-text-disabled, #999);
+  cursor: default;
+}
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--figma-color-icon-secondary, #666);
+  flex: none;
+}
+.icon:hover:not(:disabled) {
+  background: var(--figma-color-bg-hover, #f5f5f5);
+  color: var(--figma-color-icon, #1e1e1e);
+}
+.icon:disabled {
+  opacity: 0.4;
+}
+.attachment {
+  color: var(--figma-color-text-secondary, #666);
+  padding-left: 40px;
+  font-size: 11px;
+}
+footer {
+  flex: none;
+  padding: 0 24px 24px;
+}
+.actions {
+  display: flex;
+  gap: 8px;
+}
+.primary,
+.secondary {
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  line-height: 1.5;
+}
+.primary {
+  flex: 1;
+  color: var(--figma-color-text-onbrand, #fff);
+  background: var(--figma-color-bg-brand, #0d99ff);
+  font-weight: 500;
+}
+.primary:hover:not(:disabled) {
+  background: var(--figma-color-bg-brand-hover, #007be5);
+}
+.primary:disabled {
+  color: var(--figma-color-text-disabled, #999);
+  background: var(--figma-color-bg-disabled, #ddd);
+}
+.secondary {
+  color: var(--figma-color-text, #1e1e1e);
+  background: transparent;
+  border-color: var(--figma-color-border-strong, #aaa);
+}
+.secondary:hover:not(:disabled) {
+  background: var(--figma-color-bg-hover, #f5f5f5);
+}
+#status {
+  white-space: pre-line;
+  max-height: 72px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--figma-color-text-secondary, #666);
+}
+#status:not(:empty) {
+  margin-bottom: 12px;
+}
+#status.error {
+  color: var(--figma-color-text-danger, #d92d20);
+}
+progress {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 3px;
+  margin: 0 0 12px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--figma-color-bg-secondary, #f5f5f5);
+  accent-color: var(--figma-color-bg-brand, #0d99ff);
+}
+progress::-webkit-progress-bar {
+  background: var(--figma-color-bg-secondary, #f5f5f5);
+  border-radius: 2px;
+}
+progress::-webkit-progress-value {
+  background: var(--figma-color-bg-brand, #0d99ff);
+  border-radius: 2px;
+}
+
+.view-report {
+  width: 100%;
+  margin-bottom: 12px;
+}
+main.showing-report {
+  display: block;
+  padding: 0 20px 24px;
+  scrollbar-gutter: stable;
+}
+#report-panel {
+  min-width: 0;
+  margin: 0;
+}
+.report-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 0 12px;
+  border-bottom: 1px solid var(--figma-color-border, #ddd);
+  background: var(--figma-color-bg, #fff);
+}
+.report-heading h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  line-height: 1.6;
+}
+.file-report h3 {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 16px 0 4px;
+  overflow-wrap: anywhere;
+}
+.file-report + .file-report {
+  margin-top: 24px;
+}
+.file-report p {
+  margin: 0 0 16px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.file-report > p {
+  color: var(--figma-color-text-secondary, #666);
+}
+.check-group {
+  border-top: 1px solid var(--figma-color-border, #ddd);
+}
+.check-group:last-child {
+  border-bottom: 1px solid var(--figma-color-border, #ddd);
+}
+.check-group summary {
+  cursor: pointer;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.check-group > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 12px;
+  list-style: none;
+  font-weight: 500;
+  border-radius: 4px;
+}
+.check-group > summary::-webkit-details-marker {
+  display: none;
+}
+.check-group > summary::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  color: var(--figma-color-icon-secondary, #666);
+}
+.check-group[open] > summary::before {
+  transform: rotate(45deg);
+}
+.check-group > summary:hover {
+  background: var(--figma-color-bg-hover, #f5f5f5);
+}
+.check-group > summary > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.check-count {
+  flex: none;
+  min-width: 24px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--figma-color-bg-secondary, #f5f5f5);
+  color: var(--figma-color-text-secondary, #666);
+  font-size: 11px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.file-report .check-empty {
+  margin: 0;
+  padding: 0 12px 16px 28px;
+  color: var(--figma-color-text-secondary, #666);
+}
+.check-group ol,
+.check-group ul {
+  list-style: none;
+  padding: 0 12px 8px 28px;
+  margin: 0;
+}
+.check-group li {
+  padding: 12px 0;
+  overflow-wrap: anywhere;
+}
+.check-group li:first-child {
+  padding-top: 4px;
+}
+.check-group li + li {
+  border-top: 1px solid var(--figma-color-border, #ddd);
+}
+.check-values {
+  margin: 0;
+}
+.check-values > summary {
+  padding: 4px 0;
+  color: var(--figma-color-text-secondary, #666);
+  font-size: 11px;
+}
+.check-values p {
+  margin: 8px 0;
+}
+.check-values pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.6;
+  margin: 8px 0 0;
+  padding: 12px;
+  background: var(--figma-color-bg-secondary, #f5f5f5);
+  border-radius: 4px;
+}
+summary:focus-visible {
+  outline: 2px solid var(--figma-color-border-selected, #0d99ff);
+  outline-offset: -2px;
+}
+.report-layer {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--figma-color-text-brand, #087bce);
+  text-align: left;
+  font-weight: 500;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.report-layer:hover {
+  text-decoration: underline;
+}
+.check-group li > p {
+  margin: 4px 0;
+  color: var(--figma-color-text-secondary, #666);
+}
+
+    </style>
+  </head>
+  <body>
+    <main id="import-panel" aria-busy="false">
+      <div
+        id="import-indicator"
+        class="import-indicator"
+        role="img"
+        aria-label="Importing Sketch into Figma"
+        hidden
+      >
+        <svg
+          class="sketch-mark"
+          width="48"
+          height="44"
+          viewBox="0 0 48 44"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path d="M10 3 24 1 38 3 48 17 24 43 0 17Z" fill="#FDB300" />
+          <path d="M0 17 10 3 14 17Z" fill="#FDD231" />
+          <path d="M10 3 24 1 14 17Z" fill="#FEDF72" />
+          <path d="M24 1 38 3 34 17Z" fill="#FEEEB7" />
+          <path d="M38 3 48 17 34 17Z" fill="#FDD231" />
+          <path d="M24 1 34 17H14Z" fill="#FFF3CB" />
+          <path d="M0 17H14L24 43Z" fill="#EA6C00" />
+          <path d="M34 17H48L24 43Z" fill="#EA6C00" />
+          <path d="M14 17H34L24 43Z" fill="#FDAD00" />
+        </svg>
+        <svg
+          class="transfer-mark"
+          width="112"
+          height="48"
+          viewBox="0 0 112 48"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path class="transfer-line" d="M0 24H112" />
+          <g class="transfer-file">
+            <g transform="translate(0 14)">
+              <path class="transfer-file-sheet" d="M1 1h8l5 5v13H1Z" />
+              <path d="M9 1v5h5M4 10h7M4 14h5" />
+            </g>
+          </g>
+          <g class="transfer-file transfer-file-second">
+            <g transform="translate(0 14)">
+              <path class="transfer-file-sheet" d="M1 1h8l5 5v13H1Z" />
+              <path d="M9 1v5h5M4 10h7M4 14h5" />
+            </g>
+          </g>
+        </svg>
+        <svg
+          class="figma-mark"
+          width="32"
+          height="48"
+          viewBox="0 0 32 48"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path d="M8 48a8 8 0 0 0 8-8v-8H8a8 8 0 0 0 0 16Z" fill="#0ACF83" />
+          <path d="M0 24a8 8 0 0 1 8-8h8v16H8a8 8 0 0 1-8-8Z" fill="#A259FF" />
+          <path d="M0 8a8 8 0 0 1 8-8h8v16H8a8 8 0 0 1-8-8Z" fill="#F24E1E" />
+          <path d="M16 0h8a8 8 0 0 1 0 16h-8Z" fill="#FF7262" />
+          <circle cx="24" cy="24" r="8" fill="#1ABCFE" />
+        </svg>
+      </div>
+      <div id="import-content" class="content">
+        <input id="files" type="file" accept=".sketch" multiple hidden />
+        <button id="drop" class="drop" aria-label="Choose or drop Sketch files">
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M9 4H4v16h16v-5M12 3v11m-4-4 4 4 4-4M12 3h8"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span>Click or drop .sketch files</span>
+        </button>
+        <ul id="queue" aria-label="Sketch files"></ul>
+        <fieldset id="resources" aria-label="Include unused resources">
+          <label class="option"
+            ><input id="colors" type="checkbox" role="switch" checked /><span
+              >Color variables</span
+            ></label
+          >
+          <label class="option"
+            ><input
+              id="layerStyles"
+              type="checkbox"
+              role="switch"
+              checked
+            /><span>Layer styles</span></label
+          >
+          <label class="option"
+            ><input
+              id="textStyles"
+              type="checkbox"
+              role="switch"
+              checked
+            /><span>Text styles</span></label
+          >
+          <label class="option"
+            ><input
+              id="components"
+              type="checkbox"
+              role="switch"
+              checked
+            /><span>Symbols</span></label
+          >
+          <label class="option"
+            ><input id="tokens" type="checkbox" role="switch" checked /><span
+              >Tokens</span
+            ></label
+          >
+        </fieldset>
+        <div id="token-name" class="attachment" hidden></div>
+      </div>
+      <section
+        id="report-panel"
+        class="content"
+        aria-labelledby="report-title"
+        hidden
+      >
+        <div class="report-heading">
+          <h2 id="report-title">Import report</h2>
+          <button id="report-back" class="secondary">Back</button>
+        </div>
+        <div id="report-list"></div>
+      </section>
+    </main>
+    <footer id="import-footer">
+      <div id="status" role="status" aria-live="polite"></div>
+      <progress id="progress" aria-label="Import progress" hidden></progress>
+      <button id="view-report" class="secondary view-report" hidden>
+        View failed checks
+      </button>
+      <div class="actions">
+        <button id="cancel" class="secondary" hidden>Cancel</button
+        ><button id="import" class="primary" disabled>Import</button>
+      </div>
+    </footer>
+    <script>
+      "use strict";
+(() => {
+  // src/ui/report-model.ts
+  var REPORT_CATEGORIES = [
+    { id: "colors", label: "Color variables" },
+    { id: "layerStyles", label: "Layer styles" },
+    { id: "textStyles", label: "Text styles" },
+    { id: "components", label: "Symbols" },
+    { id: "tokens", label: "Tokens" }
+  ];
+  var checkCategories = new Map(
+    Object.entries({
+      "variable-binding": "colors",
+      "instance-text-style-binding": "textStyles",
+      "component-link": "components",
+      "component-override": "components",
+      "component-layout": "components",
+      "component-layout-binding": "tokens",
+      "token-binding": "tokens"
+    })
+  );
+  var geometryKinds = /* @__PURE__ */ new Set(["geometry", "transform", "boolean-geometry"]);
+  var geometryCodes = /* @__PURE__ */ new Set([
+    "GEOMETRY_DIFFERENCE",
+    "GEOMETRY_UNVERIFIED",
+    "TRANSFORM_DIFFERENCE",
+    "BOOLEAN_DIFFERENCE"
+  ]);
+  function styleCategory(sourceType, message2 = "") {
+    if (/effectStyleId/i.test(message2)) return "layerStyles";
+    return sourceType === "text" || sourceType === "textStyle" || /textStyleId|text style|typography/i.test(message2) ? "textStyles" : "layerStyles";
+  }
+  function checkCategory(check, sourceType) {
+    if (geometryKinds.has(check.kind ?? "")) return;
+    if (check.resource) return check.resource;
+    if (check.kind === "style-binding")
+      return styleCategory(sourceType, check.message);
+    if ((check.kind === "layer-exists" || check.kind === "hierarchy") && (sourceType === "symbolMaster" || sourceType === "symbolInstance"))
+      return "components";
+    return checkCategories.get(check.kind ?? "");
+  }
+  function findingCategory(finding, sourceType) {
+    const code = finding.code ?? "", path = finding.path ?? "";
+    if (geometryCodes.has(code)) return;
+    if (finding.resource) return finding.resource;
+    if (path.startsWith("tokens:") || code.startsWith("TOKEN_")) return "tokens";
+    if (code.startsWith("TEXT_STYLE_") || code.startsWith("INSTANCE_TEXT_STYLE_") || code.startsWith("FONT_"))
+      return "textStyles";
+    if (code.startsWith("VARIABLE_") || code.startsWith("SWATCH_") || code === "BOUND_PAINT_OPACITY")
+      return "colors";
+    if (code.startsWith("SYMBOL_") || code.startsWith("COMPONENT_") || code.startsWith("OVERRIDE_"))
+      return "components";
+    if (code.startsWith("STYLE_") || code === "LOCAL_STYLE_OVERRIDE" || code === "RESOURCE_CONFLICT" || code === "LEGACY_STYLE_RETAINED")
+      return styleCategory(
+        sourceType,
+        path.startsWith("text:") ? "Text Style" : finding.message
+      );
+    if (path.includes("/sharedStyleID") || path.includes("/textStyle") || sourceType === "sharedStyle")
+      return styleCategory(
+        sourceType,
+        path.startsWith("text:") ? "Text Style" : finding.message
+      );
+  }
+  var relatedKinds = new Map(
+    Object.entries({
+      STYLE_BINDING_DIFFERENCE: ["style-binding"],
+      INSTANCE_TEXT_STYLE_BINDING: ["instance-text-style-binding"],
+      TEXT_STYLE_OVERRIDE: ["style-binding", "instance-text-style-binding"],
+      TEXT_STYLE_REFERENCE: ["style-binding", "instance-text-style-binding"],
+      STYLE_REFERENCE: ["style-binding"],
+      VARIABLE_REFERENCE: ["variable-binding"]
+    })
+  );
+  function focusedReport(report) {
+    const layers = new Map(
+      (report.layers ?? []).map((layer) => [layer.sourceId, layer])
+    );
+    const groups = REPORT_CATEGORIES.map((category) => ({
+      ...category,
+      issues: [],
+      checks: 0
+    }));
+    const byId = new Map(groups.map((group) => [group.id, group]));
+    const errors = [];
+    for (const check of report.validations) {
+      const category = checkCategory(
+        check,
+        layers.get(check.sourceId ?? "")?.sourceType
+      );
+      if (!category) continue;
+      const group = byId.get(category);
+      group.checks++;
+      if (check.passed !== true)
+        group.issues.push({ sourceId: check.sourceId, check, notes: [] });
+    }
+    for (const finding of report.findings) {
+      if (finding.severity === "info" || geometryCodes.has(finding.code ?? ""))
+        continue;
+      const category = findingCategory(
+        finding,
+        layers.get(finding.sourceId ?? "")?.sourceType
+      );
+      const group = category ? byId.get(category) : void 0;
+      const related = group?.issues.find((issue2) => {
+        if (!finding.sourceId || finding.sourceId !== issue2.sourceId || !issue2.check || !relatedKinds.get(finding.code ?? "")?.includes(issue2.check.kind ?? ""))
+          return false;
+        const actual = issue2.check.actual;
+        return finding.code !== "TEXT_STYLE_OVERRIDE" || !actual || typeof actual.targetId !== "string" || !!finding.path?.includes(actual.targetId);
+      });
+      if (related) {
+        related.notes.push(finding);
+        continue;
+      }
+      const issue = { sourceId: finding.sourceId, finding, notes: [] };
+      if (group) group.issues.push(issue);
+      else if (finding.severity === "error") errors.push(issue);
+    }
+    return {
+      groups,
+      errors,
+      issueCount: groups.reduce(
+        (n, group) => n + group.issues.length,
+        errors.length
+      )
+    };
+  }
+
+  // src/ui/report-view.ts
+  function element(tag, text) {
+    const node = document.createElement(tag);
+    if (text !== void 0) node.textContent = text;
+    return node;
+  }
+  function value(v) {
+    if (v === void 0) return "Not recorded";
+    if (v === null || v === "") return "None";
+    if (typeof v === "string") return v;
+    try {
+      return JSON.stringify(v, null, 2);
+    } catch {
+      return "Could not display value";
+    }
+  }
+  function shortIssue(check) {
+    if (check.passed === null) return "Could not verify";
+    const descriptions = {
+      "layer-exists": "Symbol was not imported",
+      hierarchy: "Symbol hierarchy differs",
+      "style-binding": "Source style is not fully linked",
+      "instance-text-style-binding": "Text style is not fully linked",
+      "variable-binding": "Color variable link differs",
+      "token-binding": "Token link differs",
+      "component-link": "Source symbol is not linked",
+      "component-override": "Symbol override differs",
+      "component-layout": "Symbol layout differs",
+      "component-layout-binding": "Inherited token link differs"
+    };
+    return Object.prototype.hasOwnProperty.call(descriptions, check.kind ?? "") ? descriptions[check.kind] : "Source and Figma values differ";
+  }
+  function renderReport(container, report, select) {
+    const section = element("section"), model = focusedReport(report);
+    section.className = "file-report";
+    section.append(
+      element("h3", report.file ?? "Imported document"),
+      element(
+        "p",
+        `${model.issueCount} issue${model.issueCount === 1 ? "" : "s"}`
+      )
+    );
+    const layers = new Map((report.layers ?? []).map((l) => [l.sourceId, l]));
+    const renderGroup = (title, issues, checks = 0) => {
+      const group = element("details"), summary2 = element("summary"), count2 = element("span", String(issues.length));
+      group.className = "check-group";
+      count2.className = "check-count";
+      summary2.append(element("span", title), count2);
+      group.append(summary2);
+      if (!issues.length) {
+        const empty = element(
+          "p",
+          checks ? "No issues recorded" : "No checks recorded"
+        );
+        empty.className = "check-empty";
+        group.append(empty);
+      } else {
+        const list = element("ol");
+        for (const issue of issues) {
+          const row = element("li"), layer = issue.sourceId ? layers.get(issue.sourceId) : void 0;
+          const actual = issue.check?.actual;
+          const targetId = actual && typeof actual.targetId === "string" ? actual.targetId : layer?.targetId;
+          const name = layer?.name ?? issue.sourceId;
+          if (name && targetId) {
+            const link = element("button", name);
+            link.className = "report-layer";
+            link.title = "Show this layer in Figma";
+            link.setAttribute("aria-label", `Show ${name} in Figma`);
+            link.onclick = () => select(targetId);
+            row.append(link);
+          } else if (name) row.append(element("strong", name));
+          row.append(
+            element(
+              "p",
+              issue.check ? shortIssue(issue.check) : issue.finding.message
+            )
+          );
+          if (issue.check) {
+            const values = element("details");
+            values.className = "check-values";
+            values.append(
+              element("summary", "Details"),
+              element("p", issue.check.message ?? "Validation failed."),
+              element(
+                "pre",
+                `Expected:
+${value(issue.check.expected)}
+
+Actual:
+${value(issue.check.actual)}`
+              )
+            );
+            for (const note of issue.notes)
+              values.append(element("p", note.message));
+            row.append(values);
+          }
+          list.append(row);
+        }
+        group.append(list);
+      }
+      section.append(group);
+    };
+    for (const group of model.groups)
+      renderGroup(group.label, group.issues, group.checks);
+    if (model.errors.length) renderGroup("Import errors", model.errors);
+    container.append(section);
+  }
+
+  // src/ui/asset-preparation.ts
+  function imageDimensions(bytes) {
+    if (bytes.length > 24 && bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71) {
+      const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return { width: v.getUint32(16), height: v.getUint32(20) };
+    }
+    if (bytes[0] === 255 && bytes[1] === 216) {
+      let p = 2;
+      while (p + 4 <= bytes.length) {
+        if (bytes[p++] !== 255) continue;
+        const marker = bytes[p++];
+        if (marker === 255) {
+          p--;
+          continue;
+        }
+        if (marker === 216 || marker === 1 || marker >= 208 && marker <= 217)
+          continue;
+        const size = bytes[p] << 8 | bytes[p + 1];
+        if (size < 2 || p + size > bytes.length) return;
+        if ([
+          192,
+          193,
+          194,
+          195,
+          197,
+          198,
+          199,
+          201,
+          202,
+          203,
+          205,
+          206,
+          207
+        ].includes(marker) && size >= 7)
+          return {
+            height: bytes[p + 3] << 8 | bytes[p + 4],
+            width: bytes[p + 5] << 8 | bytes[p + 6]
+          };
+        p += size;
+      }
+    }
+  }
+  async function prepareAssets(file, progress) {
+    for (const asset of [...file.assets]) {
+      if (asset.tiles || !asset.path.startsWith("images/")) continue;
+      const size = imageDimensions(asset.bytes);
+      if (!size || Math.max(size.width, size.height) <= 4096) continue;
+      progress(
+        `Preparing original-resolution tiles: ${asset.path.split("/").pop()}\u2026`
+      );
+      const bitmap = await createImageBitmap(
+        new Blob([new Uint8Array(asset.bytes)])
+      );
+      const canvas = document.createElement("canvas"), context = canvas.getContext("2d", { colorSpace: "srgb" });
+      if (!context) {
+        bitmap.close();
+        throw new Error("Image tiling requires a canvas renderer.");
+      }
+      const tiles = [], pending2 = [];
+      try {
+        for (let y = 0; y < bitmap.height; y += 4096)
+          for (let x2 = 0; x2 < bitmap.width; x2 += 4096) {
+            const width = Math.min(4096, bitmap.width - x2), height = Math.min(4096, bitmap.height - y);
+            canvas.width = width;
+            canvas.height = height;
+            context.clearRect(0, 0, width, height);
+            context.drawImage(bitmap, x2, y, width, height, 0, 0, width, height);
+            const blob = await new Promise(
+              (resolve, reject) => canvas.toBlob(
+                (b) => b ? resolve(b) : reject(new Error("PNG tile encoding failed.")),
+                "image/png"
+              )
+            );
+            const path = `${asset.path}.tile-${x2}-${y}.png`;
+            pending2.push({
+              path,
+              bytes: new Uint8Array(await blob.arrayBuffer())
+            });
+            tiles.push({ path, x: x2, y, width, height });
+            await new Promise((r) => setTimeout(r, 0));
+          }
+        file.assets.push(...pending2);
+        asset.tiles = {
+          width: bitmap.width,
+          height: bitmap.height,
+          items: tiles
+        };
+      } finally {
+        bitmap.close();
+        canvas.width = canvas.height = 0;
+      }
+    }
+  }
+  function nativePayload(file) {
+    return {
+      ...file,
+      assets: file.assets.map(
+        (a) => a.tiles ? { ...a, originalByteLength: a.bytes.length, bytes: new Uint8Array() } : a
+      )
+    };
+  }
+
+  // src/ui/plugin-messages.ts
+  var record = (value2) => typeof value2 === "object" && value2 !== null && !Array.isArray(value2);
+  var count = (value2) => typeof value2 === "number" && Number.isSafeInteger(value2) && value2 >= 0;
+  var requestId = (value2) => typeof value2 === "string" && value2.length > 0;
+  var resourceKind = (value2) => value2 === void 0 || ["colors", "layerStyles", "textStyles", "components", "tokens"].includes(
+    value2
+  );
+  var fontName = (value2) => record(value2) && typeof value2.family === "string" && typeof value2.style === "string";
+  function summary(value2) {
+    return record(value2) && (value2.state === "complete" || value2.state === "cancelled" || value2.state === "failed") && (value2.file === void 0 || typeof value2.file === "string") && (value2.documentId === void 0 || typeof value2.documentId === "string") && (value2.layers === void 0 || Array.isArray(value2.layers) && value2.layers.every(
+      (l) => record(l) && typeof l.sourceId === "string" && typeof l.name === "string" && (l.targetId === void 0 || typeof l.targetId === "string") && (l.sourceType === void 0 || typeof l.sourceType === "string")
+    )) && record(value2.totals) && count(value2.totals.Partial) && count(value2.totals.Unsupported) && Array.isArray(value2.validations) && value2.validations.every(
+      (v) => record(v) && resourceKind(v.resource) && (v.passed === true || v.passed === false || v.passed === null) && ["kind", "sourceId", "message"].every(
+        (key) => v[key] === void 0 || typeof v[key] === "string"
+      )
+    ) && Array.isArray(value2.findings) && value2.findings.every(
+      (f) => record(f) && resourceKind(f.resource) && typeof f.message === "string" && ["code", "sourceId", "path"].every(
+        (key) => f[key] === void 0 || typeof f[key] === "string"
+      ) && (f.severity === "info" || f.severity === "warning" || f.severity === "error")
+    );
+  }
+  function readPluginMessage(data) {
+    if (!record(data) || !record(data.pluginMessage)) return;
+    const m = data.pluginMessage;
+    switch (m.type) {
+      case "ready":
+        if (Array.isArray(m.fonts) && m.fonts.every(fontName))
+          return {
+            type: "ready",
+            fonts: m.fonts,
+            hasReport: m.hasReport === true
+          };
+        break;
+      case "progress":
+        if (requestId(m.requestId) && count(m.done))
+          return { type: "progress", requestId: m.requestId, done: m.done };
+        break;
+      case "report":
+        if (requestId(m.requestId) && summary(m.report))
+          return { type: "report", requestId: m.requestId, report: m.report };
+        break;
+      case "saved-report":
+        if (summary(m.report)) return { type: "saved-report", report: m.report };
+        break;
+      case "error":
+        if ((m.requestId === void 0 || requestId(m.requestId)) && typeof m.message === "string")
+          return { type: "error", requestId: m.requestId, message: m.message };
+    }
+  }
+
+  // node_modules/fflate/esm/browser.js
+  var u8 = Uint8Array;
+  var u16 = Uint16Array;
+  var i32 = Int32Array;
+  var fleb = new u8([
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    2,
+    2,
+    3,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    4,
+    5,
+    5,
+    5,
+    5,
+    0,
+    /* unused */
+    0,
+    0,
+    /* impossible */
+    0
+  ]);
+  var fdeb = new u8([
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    2,
+    2,
+    3,
+    3,
+    4,
+    4,
+    5,
+    5,
+    6,
+    6,
+    7,
+    7,
+    8,
+    8,
+    9,
+    9,
+    10,
+    10,
+    11,
+    11,
+    12,
+    12,
+    13,
+    13,
+    /* unused */
+    0,
+    0
+  ]);
+  var clim = new u8([16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]);
+  var freb = function(eb, start) {
+    var b = new u16(31);
+    for (var i2 = 0; i2 < 31; ++i2) {
+      b[i2] = start += 1 << eb[i2 - 1];
+    }
+    var r = new i32(b[30]);
+    for (var i2 = 1; i2 < 30; ++i2) {
+      for (var j = b[i2]; j < b[i2 + 1]; ++j) {
+        r[j] = j - b[i2] << 5 | i2;
+      }
+    }
+    return { b, r };
+  };
+  var _a = freb(fleb, 2);
+  var fl = _a.b;
+  var revfl = _a.r;
+  fl[28] = 258, revfl[258] = 28;
+  var _b = freb(fdeb, 0);
+  var fd = _b.b;
+  var revfd = _b.r;
+  var rev = new u16(32768);
+  for (i = 0; i < 32768; ++i) {
+    x = (i & 43690) >> 1 | (i & 21845) << 1;
+    x = (x & 52428) >> 2 | (x & 13107) << 2;
+    x = (x & 61680) >> 4 | (x & 3855) << 4;
+    rev[i] = ((x & 65280) >> 8 | (x & 255) << 8) >> 1;
+  }
+  var x;
+  var i;
+  var hMap = (function(cd, mb, r) {
+    var s = cd.length;
+    var i2 = 0;
+    var l = new u16(mb);
+    for (; i2 < s; ++i2) {
+      if (cd[i2])
+        ++l[cd[i2] - 1];
+    }
+    var le = new u16(mb);
+    for (i2 = 1; i2 < mb; ++i2) {
+      le[i2] = le[i2 - 1] + l[i2 - 1] << 1;
+    }
+    var co;
+    if (r) {
+      co = new u16(1 << mb);
+      var rvb = 15 - mb;
+      for (i2 = 0; i2 < s; ++i2) {
+        if (cd[i2]) {
+          var sv = i2 << 4 | cd[i2];
+          var r_1 = mb - cd[i2];
+          var v = le[cd[i2] - 1]++ << r_1;
+          for (var m = v | (1 << r_1) - 1; v <= m; ++v) {
+            co[rev[v] >> rvb] = sv;
+          }
+        }
+      }
+    } else {
+      co = new u16(s);
+      for (i2 = 0; i2 < s; ++i2) {
+        if (cd[i2]) {
+          co[i2] = rev[le[cd[i2] - 1]++] >> 15 - cd[i2];
+        }
+      }
+    }
+    return co;
+  });
+  var flt = new u8(288);
+  for (i = 0; i < 144; ++i)
+    flt[i] = 8;
+  var i;
+  for (i = 144; i < 256; ++i)
+    flt[i] = 9;
+  var i;
+  for (i = 256; i < 280; ++i)
+    flt[i] = 7;
+  var i;
+  for (i = 280; i < 288; ++i)
+    flt[i] = 8;
+  var i;
+  var fdt = new u8(32);
+  for (i = 0; i < 32; ++i)
+    fdt[i] = 5;
+  var i;
+  var flrm = /* @__PURE__ */ hMap(flt, 9, 1);
+  var fdrm = /* @__PURE__ */ hMap(fdt, 5, 1);
+  var max = function(a) {
+    var m = a[0];
+    for (var i2 = 1; i2 < a.length; ++i2) {
+      if (a[i2] > m)
+        m = a[i2];
+    }
+    return m;
+  };
+  var bits = function(d, p, m) {
+    var o = p / 8 | 0;
+    return (d[o] | d[o + 1] << 8) >> (p & 7) & m;
+  };
+  var bits16 = function(d, p) {
+    var o = p / 8 | 0;
+    return (d[o] | d[o + 1] << 8 | d[o + 2] << 16) >> (p & 7);
+  };
+  var shft = function(p) {
+    return (p + 7) / 8 | 0;
+  };
+  var slc = function(v, s, e) {
+    if (s == null || s < 0)
+      s = 0;
+    if (e == null || e > v.length)
+      e = v.length;
+    return new u8(v.subarray(s, e));
+  };
+  var ec = [
+    "unexpected EOF",
+    "invalid block type",
+    "invalid length/literal",
+    "invalid distance",
+    "stream finished",
+    "no stream handler",
+    ,
+    // determined by compression function
+    "no callback",
+    "invalid UTF-8 data",
+    "extra field too long",
+    "date not in range 1980-2099",
+    "filename too long",
+    "stream finishing",
+    "invalid zip data"
+    // determined by unknown compression method
+  ];
+  var err = function(ind, msg, nt) {
+    var e = new Error(msg || ec[ind]);
+    e.code = ind;
+    if (Error.captureStackTrace)
+      Error.captureStackTrace(e, err);
+    if (!nt)
+      throw e;
+    return e;
+  };
+  var inflt = function(dat, st, buf, dict) {
+    var sl = dat.length, dl = dict ? dict.length : 0;
+    if (!sl || st.f && !st.l)
+      return buf || new u8(0);
+    var noBuf = !buf;
+    var resize = noBuf || st.i != 2;
+    var noSt = st.i;
+    if (noBuf)
+      buf = new u8(sl * 3);
+    var cbuf = function(l2) {
+      var bl = buf.length;
+      if (l2 > bl) {
+        var nbuf = new u8(Math.max(bl * 2, l2));
+        nbuf.set(buf);
+        buf = nbuf;
+      }
+    };
+    var final = st.f || 0, pos = st.p || 0, bt = st.b || 0, lm = st.l, dm = st.d, lbt = st.m, dbt = st.n;
+    var tbts = sl * 8;
+    do {
+      if (!lm) {
+        final = bits(dat, pos, 1);
+        var type = bits(dat, pos + 1, 3);
+        pos += 3;
+        if (!type) {
+          var s = shft(pos) + 4, l = dat[s - 4] | dat[s - 3] << 8, t = s + l;
+          if (t > sl) {
+            if (noSt)
+              err(0);
+            break;
+          }
+          if (resize)
+            cbuf(bt + l);
+          buf.set(dat.subarray(s, t), bt);
+          st.b = bt += l, st.p = pos = t * 8, st.f = final;
+          continue;
+        } else if (type == 1)
+          lm = flrm, dm = fdrm, lbt = 9, dbt = 5;
+        else if (type == 2) {
+          var hLit = bits(dat, pos, 31) + 257, hcLen = bits(dat, pos + 10, 15) + 4;
+          var tl = hLit + bits(dat, pos + 5, 31) + 1;
+          pos += 14;
+          var ldt = new u8(tl);
+          var clt = new u8(19);
+          for (var i2 = 0; i2 < hcLen; ++i2) {
+            clt[clim[i2]] = bits(dat, pos + i2 * 3, 7);
+          }
+          pos += hcLen * 3;
+          var clb = max(clt), clbmsk = (1 << clb) - 1;
+          var clm = hMap(clt, clb, 1);
+          for (var i2 = 0; i2 < tl; ) {
+            var r = clm[bits(dat, pos, clbmsk)];
+            pos += r & 15;
+            var s = r >> 4;
+            if (s < 16) {
+              ldt[i2++] = s;
+            } else {
+              var c = 0, n = 0;
+              if (s == 16)
+                n = 3 + bits(dat, pos, 3), pos += 2, c = ldt[i2 - 1];
+              else if (s == 17)
+                n = 3 + bits(dat, pos, 7), pos += 3;
+              else if (s == 18)
+                n = 11 + bits(dat, pos, 127), pos += 7;
+              while (n--)
+                ldt[i2++] = c;
+            }
+          }
+          var lt = ldt.subarray(0, hLit), dt = ldt.subarray(hLit);
+          lbt = max(lt);
+          dbt = max(dt);
+          lm = hMap(lt, lbt, 1);
+          dm = hMap(dt, dbt, 1);
+        } else
+          err(1);
+        if (pos > tbts) {
+          if (noSt)
+            err(0);
+          break;
+        }
+      }
+      if (resize)
+        cbuf(bt + 131072);
+      var lms = (1 << lbt) - 1, dms = (1 << dbt) - 1;
+      var lpos = pos;
+      for (; ; lpos = pos) {
+        var c = lm[bits16(dat, pos) & lms], sym = c >> 4;
+        pos += c & 15;
+        if (pos > tbts) {
+          if (noSt)
+            err(0);
+          break;
+        }
+        if (!c)
+          err(2);
+        if (sym < 256)
+          buf[bt++] = sym;
+        else if (sym == 256) {
+          lpos = pos, lm = null;
+          break;
+        } else {
+          var add = sym - 254;
+          if (sym > 264) {
+            var i2 = sym - 257, b = fleb[i2];
+            add = bits(dat, pos, (1 << b) - 1) + fl[i2];
+            pos += b;
+          }
+          var d = dm[bits16(dat, pos) & dms], dsym = d >> 4;
+          if (!d)
+            err(3);
+          pos += d & 15;
+          var dt = fd[dsym];
+          if (dsym > 3) {
+            var b = fdeb[dsym];
+            dt += bits16(dat, pos) & (1 << b) - 1, pos += b;
+          }
+          if (pos > tbts) {
+            if (noSt)
+              err(0);
+            break;
+          }
+          if (resize)
+            cbuf(bt + 131072);
+          var end = bt + add;
+          if (bt < dt) {
+            var shift = dl - dt, dend = Math.min(dt, end);
+            if (shift + bt < 0)
+              err(3);
+            for (; bt < dend; ++bt)
+              buf[bt] = dict[shift + bt];
+          }
+          for (; bt < end; ++bt)
+            buf[bt] = buf[bt - dt];
+        }
+      }
+      st.l = lm, st.p = lpos, st.b = bt, st.f = final;
+      if (lm)
+        final = 1, st.m = lbt, st.d = dm, st.n = dbt;
+    } while (!final);
+    return bt != buf.length && noBuf ? slc(buf, 0, bt) : buf.subarray(0, bt);
+  };
+  var et = /* @__PURE__ */ new u8(0);
+  var Inflate = /* @__PURE__ */ (function() {
+    function Inflate2(opts, cb) {
+      if (typeof opts == "function")
+        cb = opts, opts = {};
+      this.ondata = cb;
+      var dict = opts && opts.dictionary && opts.dictionary.subarray(-32768);
+      this.s = { i: 0, b: dict ? dict.length : 0 };
+      this.o = new u8(32768);
+      this.p = new u8(0);
+      if (dict)
+        this.o.set(dict);
+    }
+    Inflate2.prototype.e = function(c) {
+      if (!this.ondata)
+        err(5);
+      if (this.d)
+        err(4);
+      if (!this.p.length)
+        this.p = c;
+      else if (c.length) {
+        var n = new u8(this.p.length + c.length);
+        n.set(this.p), n.set(c, this.p.length), this.p = n;
+      }
+    };
+    Inflate2.prototype.c = function(final) {
+      this.s.i = +(this.d = final || false);
+      var bts = this.s.b;
+      var dt = inflt(this.p, this.s, this.o);
+      this.ondata(slc(dt, bts, this.s.b), this.d);
+      this.o = slc(dt, this.s.b - 32768), this.s.b = this.o.length;
+      this.p = slc(this.p, this.s.p / 8 | 0), this.s.p &= 7;
+    };
+    Inflate2.prototype.push = function(chunk, final) {
+      this.e(chunk), this.c(final);
+    };
+    return Inflate2;
+  })();
+  var td = typeof TextDecoder != "undefined" && /* @__PURE__ */ new TextDecoder();
+  var tds = 0;
+  try {
+    td.decode(et, { stream: true });
+    tds = 1;
+  } catch (e) {
+  }
+
+  // src/core/math.ts
+  function stable(value2) {
+    if (Array.isArray(value2)) return `[${value2.map(stable).join(",")}]`;
+    if (value2 && typeof value2 === "object")
+      return `{${Object.keys(value2).sort().map((k) => `${JSON.stringify(k)}:${stable(value2[k])}`).join(",")}}`;
+    return JSON.stringify(value2) ?? "null";
+  }
+  function fingerprint(value2) {
+    const s = typeof value2 === "string" ? value2 : stable(value2);
+    let a = 2166136261, b = 5381;
+    for (let i2 = 0; i2 < s.length; i2++) {
+      a = Math.imul(a ^ s.charCodeAt(i2), 16777619);
+      b = Math.imul(b, 33) ^ s.charCodeAt(i2);
+    }
+    return `${(a >>> 0).toString(16).padStart(8, "0")}${(b >>> 0).toString(16).padStart(8, "0")}`;
+  }
+
+  // src/core/types.ts
+  var DEFAULT_OPTIONS = {
+    selectedIds: [],
+    resources: true,
+    conflict: "preserve-local",
+    fontMap: {},
+    componentMap: {},
+    styleMap: {},
+    variableMap: {},
+    generatePrototypePage: false
+  };
+  var sourceId = (s) => String(s.do_objectID ?? s.symbolID ?? "");
+  function walkLayers(pages) {
+    const out = [];
+    const visit = (n) => {
+      out.push(n);
+      for (const c of n.layers ?? []) visit(c);
+    };
+    for (const p of pages) visit(p);
+    return out;
+  }
+
+  // src/sketch/archive.ts
+  var LIMITS = {
+    archive: 256 * 1024 * 1024,
+    expanded: 512 * 1024 * 1024,
+    entry: 128 * 1024 * 1024,
+    entries: 2e4,
+    layers: 15e4,
+    depth: 256
+  };
+  var decoder = new TextDecoder("utf-8", { fatal: true });
+  function crc32(bytes) {
+    let crc = 4294967295;
+    for (const byte of bytes) {
+      crc ^= byte;
+      for (let b = 0; b < 8; b++) crc = crc >>> 1 ^ (crc & 1 ? 3988292384 : 0);
+    }
+    return (crc ^ 4294967295) >>> 0;
+  }
+  function inspectZip(bytes) {
+    if (bytes.length > LIMITS.archive)
+      throw new Error("Archive exceeds 256 MiB safety limit.");
+    if (bytes[0] !== 80 || bytes[1] !== 75)
+      throw new Error(
+        "Not a ZIP-based Sketch document. Pre-43 binary formats require saving with modern Sketch."
+      );
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let end = -1;
+    for (let i2 = bytes.length - 22; i2 >= Math.max(0, bytes.length - 65557); i2--)
+      if (view.getUint32(i2, true) === 101010256 && i2 + 22 + view.getUint16(i2 + 20, true) === bytes.length) {
+        end = i2;
+        break;
+      }
+    if (end < 0)
+      throw new Error("Missing ZIP directory: archive may be truncated.");
+    const count2 = view.getUint16(end + 10, true), offset = view.getUint32(end + 16, true), dirSize = view.getUint32(end + 12, true);
+    if (view.getUint16(end + 4, true) !== 0 || view.getUint16(end + 6, true) !== 0 || count2 === 65535 || offset === 4294967295)
+      throw new Error("Multi-disk and ZIP64 archives are not supported.");
+    if (count2 > LIMITS.entries || offset + dirSize > end)
+      throw new Error("Invalid or oversized ZIP directory.");
+    const result = /* @__PURE__ */ new Map();
+    let p = offset, total = 0;
+    for (let i2 = 0; i2 < count2; i2++) {
+      if (p + 46 > end || view.getUint32(p, true) !== 33639248)
+        throw new Error("Corrupted ZIP directory.");
+      const flag = view.getUint16(p + 8, true), method = view.getUint16(p + 10, true), compressed = view.getUint32(p + 20, true), size = view.getUint32(p + 24, true), n = view.getUint16(p + 28, true), extra = view.getUint16(p + 30, true), comment = view.getUint16(p + 32, true);
+      if (p + 46 + n + extra + comment > end)
+        throw new Error("Truncated ZIP entry.");
+      const name = decoder.decode(bytes.subarray(p + 46, p + 46 + n));
+      if (flag & 1 || ![0, 8].includes(method))
+        throw new Error(`Encrypted or unsupported ZIP entry: ${name}`);
+      if (name.startsWith("/") || name.includes("\\") || name.split("/").includes("..") || name.includes("\0") || result.has(name))
+        throw new Error(`Unsafe or duplicate archive path: ${name}`);
+      total += size;
+      if (size > LIMITS.entry || total > LIMITS.expanded)
+        throw new Error("Expanded archive exceeds safety limits.");
+      result.set(name, {
+        name,
+        size,
+        compressed,
+        crc: view.getUint32(p + 16, true),
+        method,
+        localOffset: view.getUint32(p + 42, true),
+        flags: flag,
+        directoryOffset: offset
+      });
+      p += 46 + n + extra + comment;
+    }
+    return result;
+  }
+  async function extractZip(bytes) {
+    const entries = inspectZip(bytes), files = /* @__PURE__ */ new Map();
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const ordered = [...entries.values()].sort(
+      (a, b) => a.localOffset - b.localOffset
+    );
+    let expanded = 0;
+    for (const [i2, e] of ordered.entries()) {
+      const p = e.localOffset;
+      if (p + 30 > bytes.length || view.getUint32(p, true) !== 67324752)
+        throw new Error("Invalid local ZIP header.");
+      const flags = view.getUint16(p + 6, true), method = view.getUint16(p + 8, true), n = view.getUint16(p + 26, true), extra = view.getUint16(p + 28, true);
+      const start = p + 30 + n + extra, end = start + e.compressed;
+      if (flags !== e.flags || method !== e.method || start > bytes.length || end > e.directoryOffset || decoder.decode(bytes.subarray(p + 30, p + 30 + n)) !== e.name)
+        throw new Error("Local ZIP entries disagree with central directory.");
+      if (i2 + 1 < ordered.length && end > ordered[i2 + 1].localOffset)
+        throw new Error("Overlapping ZIP entries.");
+      if (!(flags & 8) && (view.getUint32(p + 18, true) !== e.compressed || view.getUint32(p + 22, true) !== e.size))
+        throw new Error("Local ZIP sizes disagree with central directory.");
+      if (flags & 8) {
+        const limit = ordered[i2 + 1]?.localOffset ?? e.directoryOffset;
+        let localZip64 = false;
+        for (let q = p + 30 + n; q < start; ) {
+          if (q + 4 > start) throw new Error("Truncated ZIP extra field.");
+          const tag = view.getUint16(q, true), size2 = view.getUint16(q + 2, true);
+          if (q + 4 + size2 > start) throw new Error("Truncated ZIP extra field.");
+          if (tag === 1) localZip64 = true;
+          q += 4 + size2;
+        }
+        const signed = end + 4 <= limit && view.getUint32(end, true) === 134695760, descriptor = end + (signed ? 4 : 0), length = localZip64 ? 20 : 12;
+        if (descriptor + length > limit || view.getUint32(descriptor, true) !== e.crc)
+          throw new Error("Invalid ZIP data descriptor.");
+        const compressed = view.getUint32(descriptor + 4, true), size = view.getUint32(descriptor + (localZip64 ? 12 : 8), true);
+        if (compressed !== e.compressed || size !== e.size || localZip64 && (view.getUint32(descriptor + 8, true) !== 0 || view.getUint32(descriptor + 16, true) !== 0))
+          throw new Error("Invalid ZIP data descriptor sizes.");
+      }
+      const output = new Uint8Array(e.size);
+      let at = 0;
+      const accept = (data) => {
+        at += data.length;
+        expanded += data.length;
+        if (at > e.size || expanded > LIMITS.expanded)
+          throw new Error(`ZIP expansion limit exceeded: ${e.name}`);
+        output.set(data, at - data.length);
+      };
+      if (method === 0) accept(bytes.subarray(start, end));
+      else {
+        const inflate = new Inflate((data) => accept(data));
+        if (start === end) inflate.push(new Uint8Array(), true);
+        for (let pos = start; pos < end; pos += 16384) {
+          inflate.push(
+            bytes.subarray(pos, Math.min(pos + 16384, end)),
+            pos + 16384 >= end
+          );
+        }
+      }
+      if (at !== e.size || crc32(output) !== e.crc)
+        throw new Error(`ZIP checksum/length mismatch: ${e.name}`);
+      files.set(e.name, output);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    return files;
+  }
+  async function parseSketch(bytes, name) {
+    const entries = await extractZip(bytes);
+    const read = (path, required = true) => {
+      const data = entries.get(path);
+      if (!data) {
+        if (required) throw new Error(`Missing ${path}`);
+        return {};
+      }
+      try {
+        const value2 = JSON.parse(decoder.decode(data));
+        if (!value2 || typeof value2 !== "object" || Array.isArray(value2))
+          throw new Error("expected object");
+        return value2;
+      } catch (e) {
+        throw new Error(`Invalid JSON in ${path}: ${String(e)}`);
+      }
+    };
+    const document2 = read("document.json"), meta = read("meta.json"), user = read("user.json", false), version = Number(meta.version ?? document2.version ?? 0);
+    if (!Number.isInteger(version) || version < 43)
+      throw new Error(
+        `Unsupported or missing Sketch document version: ${version}`
+      );
+    if (!Array.isArray(document2.pages))
+      throw new Error("document.pages must be an array.");
+    const warnings = [], pages = document2.pages.map(
+      (p) => p._ref ? read(`${p._ref}.json`) : p
+    );
+    const seen = /* @__PURE__ */ new Set();
+    let count2 = 0;
+    const validate = (n, depth) => {
+      if (depth > LIMITS.depth || ++count2 > LIMITS.layers)
+        throw new Error("Document layer depth/count exceeds limits.");
+      if (!n || typeof n !== "object" || typeof n._class !== "string" || !sourceId(n))
+        throw new Error("Layer is missing a class or identifier.");
+      if (seen.has(sourceId(n)))
+        throw new Error(`Duplicate layer ID: ${sourceId(n)}`);
+      seen.add(sourceId(n));
+      if (n.frame) {
+        for (const k of ["x", "y", "width", "height"])
+          if (typeof n.frame[k] !== "number" || !Number.isFinite(n.frame[k]))
+            throw new Error(`Invalid frame.${k}: ${sourceId(n)}`);
+      }
+      if (n.frame && (n.frame.width < 0 || n.frame.height < 0))
+        throw new Error("Negative layer dimensions.");
+      if (n.layers !== void 0 && !Array.isArray(n.layers))
+        throw new Error("Invalid children list.");
+      for (const c of n.layers ?? []) validate(c, depth + 1);
+    };
+    for (const p of pages) validate(p, 0);
+    const documentId = String(document2.do_objectID ?? meta.documentID ?? "");
+    if (!documentId)
+      throw new Error(
+        "Document has no stable identifier; safe reimport identity cannot be established."
+      );
+    if (![123, 144, 182, 196].includes(version))
+      warnings.push({
+        code: "UNVERIFIED_SOURCE_VERSION",
+        severity: "warning",
+        message: `Source version ${version} is outside the exercised fixture versions (123, 144, 182, 196). Unknown properties are retained and reported.`
+      });
+    const assets = [...entries].filter(([p]) => p.startsWith("images/") || p.startsWith("fonts/")).map(([path, bytes2]) => ({ path, bytes: bytes2 }));
+    return {
+      name,
+      documentId,
+      version,
+      document: document2,
+      meta,
+      user,
+      pages,
+      assets,
+      digest: fingerprint({ document: document2, pages }),
+      warnings
+    };
+  }
+
+  // src/core/dependencies.ts
+  function masters(file) {
+    const all = walkLayers(file.pages).filter((n) => n._class === "symbolMaster");
+    for (const f of file.document.foreignSymbols ?? [])
+      if (f.symbolMaster) all.push(f.symbolMaster);
+    return new Map(all.map((s) => [String(s.symbolID), s]));
+  }
+  function selection(pages, ids) {
+    const out = /* @__PURE__ */ new Set();
+    const selected = new Set(ids);
+    const all = ids.length === 0;
+    function visit(n, inherited) {
+      const yes = all || inherited || selected.has(sourceId(n));
+      let any = yes;
+      for (const c of n.layers ?? []) any = visit(c, yes) || any;
+      if (any) out.add(sourceId(n));
+      return any;
+    }
+    for (const p of pages) visit(p, false);
+    return out;
+  }
+  function requiredSymbols(pages, scope, available) {
+    const result = /* @__PURE__ */ new Set();
+    function add(id) {
+      if (result.has(id)) return;
+      result.add(id);
+      const s = available.get(id);
+      if (s) {
+        for (const n of walkLayers(s.layers ?? []))
+          if (n._class === "symbolInstance") {
+            add(String(n.symbolID));
+            for (const o of n.overrideValues ?? []) if (String(o.overrideName).endsWith("_symbolID") && o.value) add(String(o.value));
+          }
+      }
+    }
+    for (const n of walkLayers(pages))
+      if (scope.has(sourceId(n)) && n._class === "symbolInstance") {
+        add(String(n.symbolID));
+        for (const o of n.overrideValues ?? []) if (String(o.overrideName).endsWith("_symbolID") && o.value) add(String(o.value));
+      }
+    return result;
+  }
+
+  // src/core/resource-selection.ts
+  var includeUnused = (options, kind) => options.resourceTypes?.[kind] ?? options.resources;
+  function sourceStyles(file, kind) {
+    const foreign = kind === "layerStyles" ? "foreignLayerStyles" : "foreignTextStyles";
+    const local = kind === "layerStyles" ? "layerStyles" : "layerTextStyles";
+    return [
+      ...file.document[local]?.objects ?? [],
+      ...(file.document[foreign] ?? []).map((s) => s.localSharedStyle).filter(Boolean)
+    ];
+  }
+  function resourceSelection(file, options) {
+    const scope = options.resourcesOnly ? /* @__PURE__ */ new Set() : selection(file.pages, options.selectedIds);
+    for (const group of walkLayers(file.pages))
+      if (group._class === "shapeGroup" && scope.has(sourceId(group)))
+        for (const child of walkLayers(group.layers ?? []))
+          scope.add(sourceId(child));
+    const available = masters(file), ordinary = new Set(scope);
+    for (const master of available.values())
+      for (const layer of walkLayers([master])) ordinary.delete(sourceId(layer));
+    const symbols = requiredSymbols(file.pages, ordinary, available);
+    const selected = new Set(options.selectedIds);
+    for (const [id, master] of available)
+      if (includeUnused(options, "components") || selected.has(id) || selected.has(sourceId(master))) {
+        symbols.add(id);
+        for (const child of requiredSymbols(
+          [master],
+          new Set(walkLayers([master]).map(sourceId)),
+          available
+        ))
+          symbols.add(child);
+      }
+    if (options.resourceTypes?.components === false) {
+      for (const [id, master] of available)
+        if (!symbols.has(id))
+          for (const layer of walkLayers([master])) scope.delete(sourceId(layer));
+    }
+    const byId = new Map(
+      walkLayers(file.pages).filter((n) => scope.has(sourceId(n))).map((n) => [sourceId(n), n])
+    );
+    for (const id of symbols) {
+      const master = available.get(id);
+      if (master)
+        for (const layer of walkLayers([master]))
+          byId.set(sourceId(layer), layer);
+    }
+    const styles = /* @__PURE__ */ new Set(), colors = /* @__PURE__ */ new Set();
+    function references(value2) {
+      if (!value2 || typeof value2 !== "object") return;
+      const object = value2;
+      if (typeof object.sharedStyleID === "string")
+        styles.add(object.sharedStyleID);
+      if (typeof object.swatchID === "string") colors.add(object.swatchID);
+      if (/_(textStyle|layerStyle)$/.test(String(object.overrideName)) && typeof object.value === "string")
+        styles.add(object.value);
+      for (const [key, child] of Object.entries(object))
+        if (key !== "layers" && key !== "userInfo") references(child);
+    }
+    for (const layer of byId.values()) references(layer);
+    const definitions = [
+      ...sourceStyles(file, "layerStyles"),
+      ...sourceStyles(file, "textStyles")
+    ];
+    for (const kind of ["layerStyles", "textStyles"])
+      if (includeUnused(options, kind))
+        for (const style of sourceStyles(file, kind)) styles.add(sourceId(style));
+    const scanned = /* @__PURE__ */ new Set();
+    for (const id of styles) {
+      if (scanned.has(id)) continue;
+      scanned.add(id);
+      const definition = definitions.find((s) => sourceId(s) === id);
+      if (definition) references(definition.value);
+    }
+    const tokenNames = /* @__PURE__ */ new Set(), tokens2 = options.tokens;
+    const requireToken = (name) => {
+      if (tokenNames.has(name)) return;
+      tokenNames.add(name);
+      const token = tokens2?.tokens.find((t) => t.name === name);
+      for (const value2 of Object.values(token?.values ?? {}))
+        if (typeof value2 === "string" && /^\{.+\}$/.test(value2))
+          requireToken(value2.slice(1, -1));
+    };
+    if (tokens2) {
+      if (includeUnused(options, "tokens"))
+        for (const token of tokens2.tokens) requireToken(token.name);
+      for (const binding of tokens2.bindings ?? [])
+        if (byId.has(binding.sourceId)) requireToken(binding.token);
+    }
+    return {
+      scope,
+      symbols,
+      layers: [...byId.values()],
+      styles,
+      colors,
+      tokenNames
+    };
+  }
+  function importFontNames(file, options) {
+    const plan = resourceSelection(file, options), fonts2 = /* @__PURE__ */ new Set();
+    const scan = (value2) => {
+      if (!value2 || typeof value2 !== "object") return;
+      const o = value2;
+      if (o._class === "fontDescriptor" && typeof o.attributes?.name === "string")
+        fonts2.add(o.attributes.name);
+      if (o.MSAttributedStringFontAttribute?.attributes?.name)
+        fonts2.add(o.MSAttributedStringFontAttribute.attributes.name);
+      for (const [key, child] of Object.entries(o))
+        if (key !== "layers" && key !== "userInfo") scan(child);
+    };
+    for (const layer of plan.layers) scan(layer);
+    for (const style of [
+      ...sourceStyles(file, "layerStyles"),
+      ...sourceStyles(file, "textStyles")
+    ])
+      if (plan.styles.has(sourceId(style))) scan(style.value);
+    return [...fonts2];
+  }
+
+  // src/figma/typography.ts
+  var normalizeFont = (name) => name.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  var postscriptAliases = {
+    ArialMT: { family: "Arial", style: "Regular" },
+    "Arial-BoldMT": { family: "Arial", style: "Bold" },
+    "Arial-ItalicMT": { family: "Arial", style: "Italic" },
+    "Arial-BoldItalicMT": { family: "Arial", style: "Bold Italic" }
+  };
+  function matchFont(name, fonts2) {
+    const alias = postscriptAliases[name];
+    if (alias)
+      return fonts2.find(
+        (f) => normalizeFont(f.fontName.family + f.fontName.style) === normalizeFont(alias.family + alias.style)
+      )?.fontName;
+    const n = normalizeFont(name);
+    return fonts2.find((f) => normalizeFont(f.fontName.family + f.fontName.style) === n)?.fontName ?? fonts2.find(
+      (f) => normalizeFont(f.fontName.family) === n && f.fontName.style === "Regular"
+    )?.fontName;
+  }
+
+  // src/figma/resources.ts
+  function validateTokens(value2) {
+    const t = value2;
+    if (!t || typeof t.collection !== "string" || !Array.isArray(t.modes) || !t.modes.length || !t.modes.every((m) => typeof m === "string") || new Set(t.modes).size !== t.modes.length || !Array.isArray(t.tokens))
+      throw new Error(
+        "Token JSON requires collection, unique modes[], and tokens[]."
+      );
+    if (t.bindings !== void 0 && (!Array.isArray(t.bindings) || !t.bindings.every(
+      (b) => b && typeof b.sourceId === "string" && typeof b.field === "string" && typeof b.token === "string"
+    )))
+      throw new Error(
+        "Token bindings require sourceId, field, and token strings."
+      );
+    const boundFields = /* @__PURE__ */ new Set();
+    for (const b of t.bindings ?? []) {
+      const key = `${b.sourceId}:${b.field}`;
+      if (boundFields.has(key)) throw new Error(`Duplicate token binding ${key}`);
+      boundFields.add(key);
+    }
+    const names = /* @__PURE__ */ new Set();
+    for (const token of t.tokens) {
+      if (typeof token.name !== "string" || names.has(token.name) || !["COLOR", "FLOAT", "STRING", "BOOLEAN"].includes(token.type) || !token.values)
+        throw new Error("Invalid or duplicate token.");
+      names.add(token.name);
+      for (const mode of t.modes) {
+        const value3 = token.values[mode];
+        if (value3 === void 0)
+          throw new Error(`Missing ${mode} value for ${token.name}`);
+        if (typeof value3 === "string" && /^\{.+\}$/.test(value3)) continue;
+        const valid = token.type === "FLOAT" ? typeof value3 === "number" && Number.isFinite(value3) : token.type === "BOOLEAN" ? typeof value3 === "boolean" : token.type === "STRING" ? typeof value3 === "string" : !!value3 && typeof value3 === "object" && ["r", "g", "b"].every(
+          (k) => typeof value3[k] === "number" && value3[k] >= 0 && value3[k] <= 1
+        ) && (value3.a === void 0 || typeof value3.a === "number" && value3.a >= 0 && value3.a <= 1);
+        if (!valid)
+          throw new Error(
+            `Invalid ${token.type} value for ${token.name}/${mode}`
+          );
+      }
+    }
+    return t;
+  }
+
+  // src/ui/main.ts
+  var $ = (id) => document.getElementById(id);
+  var el = (tag, text) => {
+    const node = document.createElement(tag);
+    if (text !== void 0) node.textContent = text;
+    return node;
+  };
+  var kinds = [
+    "colors",
+    "layerStyles",
+    "textStyles",
+    "components",
+    "tokens"
+  ];
+  var queue = [];
+  var pending = /* @__PURE__ */ new Map();
+  var reportOpen = false;
+  var hasSavedReport = false;
+  var readingReport = false;
+  var reports = [];
+  var statusRevision = 0;
+  var serial = 0;
+  var initialized = false;
+  var running = false;
+  var cancelled = false;
+  var currentRequest;
+  var fonts = [];
+  var tokens;
+  var tokenName = "";
+  var tokenError = "";
+  var tokenLoading = false;
+  var tokenRevision = 0;
+  var worker;
+  var requestId2 = () => `${Date.now()}-${++serial}`;
+  var post = (message2) => parent.postMessage({ pluginMessage: message2 }, "*");
+  var message = (error) => error instanceof Error ? error.message : String(error);
+  function status(text, error = false) {
+    $("status").textContent = text;
+    $("status").classList.toggle("error", error);
+    return ++statusRevision;
+  }
+  function removeButton(label, remove) {
+    const button = el("button", "\xD7");
+    button.className = "icon";
+    button.setAttribute("aria-label", label);
+    button.disabled = running;
+    button.onclick = () => {
+      if (!running) remove();
+    };
+    return button;
+  }
+  function render() {
+    $("import-panel").setAttribute("aria-busy", String(running));
+    $("import-indicator").hidden = !running;
+    $("import-content").hidden = running || reportOpen;
+    $("report-panel").hidden = running || !reportOpen;
+    $("import-panel").classList.toggle("showing-report", reportOpen && !running);
+    $("import-footer").hidden = reportOpen && !running;
+    const failed = reports.reduce((n, r) => n + focusedReport(r).issueCount, 0);
+    const reportButton = $("view-report");
+    reportButton.hidden = running || reportOpen || !reports.length && !hasSavedReport;
+    reportButton.disabled = readingReport;
+    reportButton.textContent = readingReport ? "Loading report\u2026" : reports.length ? failed ? `View import report (${failed})` : "View import report" : "View saved import report";
+    const list = $("queue");
+    list.replaceChildren();
+    for (const item of queue) {
+      const row = el("li"), name = el("span", item.source.name);
+      row.className = item.parsing ? "file file-reading" : "file";
+      row.setAttribute("aria-busy", String(item.parsing));
+      name.className = "file-name";
+      name.title = item.source.name;
+      row.append(name);
+      if (item.parsing || item.error) {
+        const state = el(
+          "span",
+          item.error ? "Error" : item.file ? "Preparing\u2026" : "Reading\u2026"
+        );
+        state.className = "file-state" + (item.error ? " file-error" : "");
+        state.title = item.error ?? "";
+        row.append(state);
+      }
+      if (item.parsing) {
+        const bar = el("div");
+        bar.className = "file-progress";
+        bar.setAttribute("role", "progressbar");
+        bar.setAttribute(
+          "aria-label",
+          `${item.file ? "Preparing" : "Reading"} ${item.source.name}`
+        );
+        const segment = el("span");
+        segment.setAttribute("aria-hidden", "true");
+        bar.append(segment);
+        row.append(bar);
+      }
+      row.append(
+        removeButton(`Remove ${item.source.name}`, () => {
+          queue.splice(queue.indexOf(item), 1);
+          status("");
+          render();
+        })
+      );
+      list.append(row);
+    }
+    const attachment = $("token-name");
+    attachment.replaceChildren();
+    attachment.hidden = !tokenName;
+    if (tokenName) {
+      const name = el("span", tokenLoading ? "Reading\u2026" : tokenName);
+      name.className = "file-name" + (tokenError ? " file-error" : "");
+      name.title = tokenError || tokenName;
+      attachment.append(
+        name,
+        removeButton(`Remove ${tokenName}`, () => {
+          tokenRevision++;
+          tokens = void 0;
+          tokenName = tokenError = "";
+          tokenLoading = false;
+          status("");
+          render();
+        })
+      );
+    }
+    $("drop").toggleAttribute("disabled", running);
+    $("files").toggleAttribute("disabled", running);
+    $("resources").toggleAttribute("disabled", running);
+    $("import").toggleAttribute(
+      "disabled",
+      running || !initialized || tokenLoading || !!tokenError || !queue.length || queue.some((q) => q.parsing || !!q.error || !q.file)
+    );
+    $("cancel").hidden = !running;
+    $("cancel").toggleAttribute("disabled", cancelled);
+    $("progress").hidden = !running;
+  }
+  async function acceptParsed(item, file, error) {
+    if (!queue.includes(item)) return;
+    let preparationStatus;
+    try {
+      if (error) throw new Error(error);
+      if (!file) throw new Error("Archive could not be read.");
+      const duplicate = queue.find(
+        (q) => q !== item && q.file?.documentId === file.documentId
+      );
+      if (duplicate) {
+        if (duplicate.file.digest === file.digest && !duplicate.error || queue.indexOf(item) < queue.indexOf(duplicate)) {
+          queue.splice(queue.indexOf(item), 1);
+          status(`${item.source.name}: already added.`);
+          return;
+        }
+        queue.splice(queue.indexOf(duplicate), 1);
+        status(`${item.source.name}: updated.`);
+      }
+      item.file = file;
+      render();
+      await prepareAssets(file, () => {
+        if (queue.includes(item))
+          preparationStatus = status(`Preparing ${item.source.name}\u2026`);
+      });
+    } catch (error2) {
+      item.error = message(error2);
+      if (queue.includes(item))
+        status(`${item.source.name}: ${item.error}`, true);
+    } finally {
+      item.parsing = false;
+      if (preparationStatus !== void 0 && preparationStatus === statusRevision)
+        status("");
+      render();
+    }
+  }
+  try {
+    const url = URL.createObjectURL(
+      new Blob(['"use strict";\n(() => {\n  // node_modules/fflate/esm/browser.js\n  var u8 = Uint8Array;\n  var u16 = Uint16Array;\n  var i32 = Int32Array;\n  var fleb = new u8([\n    0,\n    0,\n    0,\n    0,\n    0,\n    0,\n    0,\n    0,\n    1,\n    1,\n    1,\n    1,\n    2,\n    2,\n    2,\n    2,\n    3,\n    3,\n    3,\n    3,\n    4,\n    4,\n    4,\n    4,\n    5,\n    5,\n    5,\n    5,\n    0,\n    /* unused */\n    0,\n    0,\n    /* impossible */\n    0\n  ]);\n  var fdeb = new u8([\n    0,\n    0,\n    0,\n    0,\n    1,\n    1,\n    2,\n    2,\n    3,\n    3,\n    4,\n    4,\n    5,\n    5,\n    6,\n    6,\n    7,\n    7,\n    8,\n    8,\n    9,\n    9,\n    10,\n    10,\n    11,\n    11,\n    12,\n    12,\n    13,\n    13,\n    /* unused */\n    0,\n    0\n  ]);\n  var clim = new u8([16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]);\n  var freb = function(eb, start) {\n    var b = new u16(31);\n    for (var i2 = 0; i2 < 31; ++i2) {\n      b[i2] = start += 1 << eb[i2 - 1];\n    }\n    var r = new i32(b[30]);\n    for (var i2 = 1; i2 < 30; ++i2) {\n      for (var j = b[i2]; j < b[i2 + 1]; ++j) {\n        r[j] = j - b[i2] << 5 | i2;\n      }\n    }\n    return { b, r };\n  };\n  var _a = freb(fleb, 2);\n  var fl = _a.b;\n  var revfl = _a.r;\n  fl[28] = 258, revfl[258] = 28;\n  var _b = freb(fdeb, 0);\n  var fd = _b.b;\n  var revfd = _b.r;\n  var rev = new u16(32768);\n  for (i = 0; i < 32768; ++i) {\n    x = (i & 43690) >> 1 | (i & 21845) << 1;\n    x = (x & 52428) >> 2 | (x & 13107) << 2;\n    x = (x & 61680) >> 4 | (x & 3855) << 4;\n    rev[i] = ((x & 65280) >> 8 | (x & 255) << 8) >> 1;\n  }\n  var x;\n  var i;\n  var hMap = (function(cd, mb, r) {\n    var s = cd.length;\n    var i2 = 0;\n    var l = new u16(mb);\n    for (; i2 < s; ++i2) {\n      if (cd[i2])\n        ++l[cd[i2] - 1];\n    }\n    var le = new u16(mb);\n    for (i2 = 1; i2 < mb; ++i2) {\n      le[i2] = le[i2 - 1] + l[i2 - 1] << 1;\n    }\n    var co;\n    if (r) {\n      co = new u16(1 << mb);\n      var rvb = 15 - mb;\n      for (i2 = 0; i2 < s; ++i2) {\n        if (cd[i2]) {\n          var sv = i2 << 4 | cd[i2];\n          var r_1 = mb - cd[i2];\n          var v = le[cd[i2] - 1]++ << r_1;\n          for (var m = v | (1 << r_1) - 1; v <= m; ++v) {\n            co[rev[v] >> rvb] = sv;\n          }\n        }\n      }\n    } else {\n      co = new u16(s);\n      for (i2 = 0; i2 < s; ++i2) {\n        if (cd[i2]) {\n          co[i2] = rev[le[cd[i2] - 1]++] >> 15 - cd[i2];\n        }\n      }\n    }\n    return co;\n  });\n  var flt = new u8(288);\n  for (i = 0; i < 144; ++i)\n    flt[i] = 8;\n  var i;\n  for (i = 144; i < 256; ++i)\n    flt[i] = 9;\n  var i;\n  for (i = 256; i < 280; ++i)\n    flt[i] = 7;\n  var i;\n  for (i = 280; i < 288; ++i)\n    flt[i] = 8;\n  var i;\n  var fdt = new u8(32);\n  for (i = 0; i < 32; ++i)\n    fdt[i] = 5;\n  var i;\n  var flrm = /* @__PURE__ */ hMap(flt, 9, 1);\n  var fdrm = /* @__PURE__ */ hMap(fdt, 5, 1);\n  var max = function(a) {\n    var m = a[0];\n    for (var i2 = 1; i2 < a.length; ++i2) {\n      if (a[i2] > m)\n        m = a[i2];\n    }\n    return m;\n  };\n  var bits = function(d, p, m) {\n    var o = p / 8 | 0;\n    return (d[o] | d[o + 1] << 8) >> (p & 7) & m;\n  };\n  var bits16 = function(d, p) {\n    var o = p / 8 | 0;\n    return (d[o] | d[o + 1] << 8 | d[o + 2] << 16) >> (p & 7);\n  };\n  var shft = function(p) {\n    return (p + 7) / 8 | 0;\n  };\n  var slc = function(v, s, e) {\n    if (s == null || s < 0)\n      s = 0;\n    if (e == null || e > v.length)\n      e = v.length;\n    return new u8(v.subarray(s, e));\n  };\n  var ec = [\n    "unexpected EOF",\n    "invalid block type",\n    "invalid length/literal",\n    "invalid distance",\n    "stream finished",\n    "no stream handler",\n    ,\n    // determined by compression function\n    "no callback",\n    "invalid UTF-8 data",\n    "extra field too long",\n    "date not in range 1980-2099",\n    "filename too long",\n    "stream finishing",\n    "invalid zip data"\n    // determined by unknown compression method\n  ];\n  var err = function(ind, msg, nt) {\n    var e = new Error(msg || ec[ind]);\n    e.code = ind;\n    if (Error.captureStackTrace)\n      Error.captureStackTrace(e, err);\n    if (!nt)\n      throw e;\n    return e;\n  };\n  var inflt = function(dat, st, buf, dict) {\n    var sl = dat.length, dl = dict ? dict.length : 0;\n    if (!sl || st.f && !st.l)\n      return buf || new u8(0);\n    var noBuf = !buf;\n    var resize = noBuf || st.i != 2;\n    var noSt = st.i;\n    if (noBuf)\n      buf = new u8(sl * 3);\n    var cbuf = function(l2) {\n      var bl = buf.length;\n      if (l2 > bl) {\n        var nbuf = new u8(Math.max(bl * 2, l2));\n        nbuf.set(buf);\n        buf = nbuf;\n      }\n    };\n    var final = st.f || 0, pos = st.p || 0, bt = st.b || 0, lm = st.l, dm = st.d, lbt = st.m, dbt = st.n;\n    var tbts = sl * 8;\n    do {\n      if (!lm) {\n        final = bits(dat, pos, 1);\n        var type = bits(dat, pos + 1, 3);\n        pos += 3;\n        if (!type) {\n          var s = shft(pos) + 4, l = dat[s - 4] | dat[s - 3] << 8, t = s + l;\n          if (t > sl) {\n            if (noSt)\n              err(0);\n            break;\n          }\n          if (resize)\n            cbuf(bt + l);\n          buf.set(dat.subarray(s, t), bt);\n          st.b = bt += l, st.p = pos = t * 8, st.f = final;\n          continue;\n        } else if (type == 1)\n          lm = flrm, dm = fdrm, lbt = 9, dbt = 5;\n        else if (type == 2) {\n          var hLit = bits(dat, pos, 31) + 257, hcLen = bits(dat, pos + 10, 15) + 4;\n          var tl = hLit + bits(dat, pos + 5, 31) + 1;\n          pos += 14;\n          var ldt = new u8(tl);\n          var clt = new u8(19);\n          for (var i2 = 0; i2 < hcLen; ++i2) {\n            clt[clim[i2]] = bits(dat, pos + i2 * 3, 7);\n          }\n          pos += hcLen * 3;\n          var clb = max(clt), clbmsk = (1 << clb) - 1;\n          var clm = hMap(clt, clb, 1);\n          for (var i2 = 0; i2 < tl; ) {\n            var r = clm[bits(dat, pos, clbmsk)];\n            pos += r & 15;\n            var s = r >> 4;\n            if (s < 16) {\n              ldt[i2++] = s;\n            } else {\n              var c = 0, n = 0;\n              if (s == 16)\n                n = 3 + bits(dat, pos, 3), pos += 2, c = ldt[i2 - 1];\n              else if (s == 17)\n                n = 3 + bits(dat, pos, 7), pos += 3;\n              else if (s == 18)\n                n = 11 + bits(dat, pos, 127), pos += 7;\n              while (n--)\n                ldt[i2++] = c;\n            }\n          }\n          var lt = ldt.subarray(0, hLit), dt = ldt.subarray(hLit);\n          lbt = max(lt);\n          dbt = max(dt);\n          lm = hMap(lt, lbt, 1);\n          dm = hMap(dt, dbt, 1);\n        } else\n          err(1);\n        if (pos > tbts) {\n          if (noSt)\n            err(0);\n          break;\n        }\n      }\n      if (resize)\n        cbuf(bt + 131072);\n      var lms = (1 << lbt) - 1, dms = (1 << dbt) - 1;\n      var lpos = pos;\n      for (; ; lpos = pos) {\n        var c = lm[bits16(dat, pos) & lms], sym = c >> 4;\n        pos += c & 15;\n        if (pos > tbts) {\n          if (noSt)\n            err(0);\n          break;\n        }\n        if (!c)\n          err(2);\n        if (sym < 256)\n          buf[bt++] = sym;\n        else if (sym == 256) {\n          lpos = pos, lm = null;\n          break;\n        } else {\n          var add = sym - 254;\n          if (sym > 264) {\n            var i2 = sym - 257, b = fleb[i2];\n            add = bits(dat, pos, (1 << b) - 1) + fl[i2];\n            pos += b;\n          }\n          var d = dm[bits16(dat, pos) & dms], dsym = d >> 4;\n          if (!d)\n            err(3);\n          pos += d & 15;\n          var dt = fd[dsym];\n          if (dsym > 3) {\n            var b = fdeb[dsym];\n            dt += bits16(dat, pos) & (1 << b) - 1, pos += b;\n          }\n          if (pos > tbts) {\n            if (noSt)\n              err(0);\n            break;\n          }\n          if (resize)\n            cbuf(bt + 131072);\n          var end = bt + add;\n          if (bt < dt) {\n            var shift = dl - dt, dend = Math.min(dt, end);\n            if (shift + bt < 0)\n              err(3);\n            for (; bt < dend; ++bt)\n              buf[bt] = dict[shift + bt];\n          }\n          for (; bt < end; ++bt)\n            buf[bt] = buf[bt - dt];\n        }\n      }\n      st.l = lm, st.p = lpos, st.b = bt, st.f = final;\n      if (lm)\n        final = 1, st.m = lbt, st.d = dm, st.n = dbt;\n    } while (!final);\n    return bt != buf.length && noBuf ? slc(buf, 0, bt) : buf.subarray(0, bt);\n  };\n  var et = /* @__PURE__ */ new u8(0);\n  var Inflate = /* @__PURE__ */ (function() {\n    function Inflate2(opts, cb) {\n      if (typeof opts == "function")\n        cb = opts, opts = {};\n      this.ondata = cb;\n      var dict = opts && opts.dictionary && opts.dictionary.subarray(-32768);\n      this.s = { i: 0, b: dict ? dict.length : 0 };\n      this.o = new u8(32768);\n      this.p = new u8(0);\n      if (dict)\n        this.o.set(dict);\n    }\n    Inflate2.prototype.e = function(c) {\n      if (!this.ondata)\n        err(5);\n      if (this.d)\n        err(4);\n      if (!this.p.length)\n        this.p = c;\n      else if (c.length) {\n        var n = new u8(this.p.length + c.length);\n        n.set(this.p), n.set(c, this.p.length), this.p = n;\n      }\n    };\n    Inflate2.prototype.c = function(final) {\n      this.s.i = +(this.d = final || false);\n      var bts = this.s.b;\n      var dt = inflt(this.p, this.s, this.o);\n      this.ondata(slc(dt, bts, this.s.b), this.d);\n      this.o = slc(dt, this.s.b - 32768), this.s.b = this.o.length;\n      this.p = slc(this.p, this.s.p / 8 | 0), this.s.p &= 7;\n    };\n    Inflate2.prototype.push = function(chunk, final) {\n      this.e(chunk), this.c(final);\n    };\n    return Inflate2;\n  })();\n  var td = typeof TextDecoder != "undefined" && /* @__PURE__ */ new TextDecoder();\n  var tds = 0;\n  try {\n    td.decode(et, { stream: true });\n    tds = 1;\n  } catch (e) {\n  }\n\n  // src/core/math.ts\n  function stable(value) {\n    if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;\n    if (value && typeof value === "object")\n      return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stable(value[k])}`).join(",")}}`;\n    return JSON.stringify(value) ?? "null";\n  }\n  function fingerprint(value) {\n    const s = typeof value === "string" ? value : stable(value);\n    let a = 2166136261, b = 5381;\n    for (let i2 = 0; i2 < s.length; i2++) {\n      a = Math.imul(a ^ s.charCodeAt(i2), 16777619);\n      b = Math.imul(b, 33) ^ s.charCodeAt(i2);\n    }\n    return `${(a >>> 0).toString(16).padStart(8, "0")}${(b >>> 0).toString(16).padStart(8, "0")}`;\n  }\n\n  // src/core/types.ts\n  var sourceId = (s) => String(s.do_objectID ?? s.symbolID ?? "");\n\n  // src/sketch/archive.ts\n  var LIMITS = {\n    archive: 256 * 1024 * 1024,\n    expanded: 512 * 1024 * 1024,\n    entry: 128 * 1024 * 1024,\n    entries: 2e4,\n    layers: 15e4,\n    depth: 256\n  };\n  var decoder = new TextDecoder("utf-8", { fatal: true });\n  function crc32(bytes) {\n    let crc = 4294967295;\n    for (const byte of bytes) {\n      crc ^= byte;\n      for (let b = 0; b < 8; b++) crc = crc >>> 1 ^ (crc & 1 ? 3988292384 : 0);\n    }\n    return (crc ^ 4294967295) >>> 0;\n  }\n  function inspectZip(bytes) {\n    if (bytes.length > LIMITS.archive)\n      throw new Error("Archive exceeds 256 MiB safety limit.");\n    if (bytes[0] !== 80 || bytes[1] !== 75)\n      throw new Error(\n        "Not a ZIP-based Sketch document. Pre-43 binary formats require saving with modern Sketch."\n      );\n    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);\n    let end = -1;\n    for (let i2 = bytes.length - 22; i2 >= Math.max(0, bytes.length - 65557); i2--)\n      if (view.getUint32(i2, true) === 101010256 && i2 + 22 + view.getUint16(i2 + 20, true) === bytes.length) {\n        end = i2;\n        break;\n      }\n    if (end < 0)\n      throw new Error("Missing ZIP directory: archive may be truncated.");\n    const count = view.getUint16(end + 10, true), offset = view.getUint32(end + 16, true), dirSize = view.getUint32(end + 12, true);\n    if (view.getUint16(end + 4, true) !== 0 || view.getUint16(end + 6, true) !== 0 || count === 65535 || offset === 4294967295)\n      throw new Error("Multi-disk and ZIP64 archives are not supported.");\n    if (count > LIMITS.entries || offset + dirSize > end)\n      throw new Error("Invalid or oversized ZIP directory.");\n    const result = /* @__PURE__ */ new Map();\n    let p = offset, total = 0;\n    for (let i2 = 0; i2 < count; i2++) {\n      if (p + 46 > end || view.getUint32(p, true) !== 33639248)\n        throw new Error("Corrupted ZIP directory.");\n      const flag = view.getUint16(p + 8, true), method = view.getUint16(p + 10, true), compressed = view.getUint32(p + 20, true), size = view.getUint32(p + 24, true), n = view.getUint16(p + 28, true), extra = view.getUint16(p + 30, true), comment = view.getUint16(p + 32, true);\n      if (p + 46 + n + extra + comment > end)\n        throw new Error("Truncated ZIP entry.");\n      const name = decoder.decode(bytes.subarray(p + 46, p + 46 + n));\n      if (flag & 1 || ![0, 8].includes(method))\n        throw new Error(`Encrypted or unsupported ZIP entry: ${name}`);\n      if (name.startsWith("/") || name.includes("\\\\") || name.split("/").includes("..") || name.includes("\\0") || result.has(name))\n        throw new Error(`Unsafe or duplicate archive path: ${name}`);\n      total += size;\n      if (size > LIMITS.entry || total > LIMITS.expanded)\n        throw new Error("Expanded archive exceeds safety limits.");\n      result.set(name, {\n        name,\n        size,\n        compressed,\n        crc: view.getUint32(p + 16, true),\n        method,\n        localOffset: view.getUint32(p + 42, true),\n        flags: flag,\n        directoryOffset: offset\n      });\n      p += 46 + n + extra + comment;\n    }\n    return result;\n  }\n  async function extractZip(bytes) {\n    const entries = inspectZip(bytes), files = /* @__PURE__ */ new Map();\n    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);\n    const ordered = [...entries.values()].sort(\n      (a, b) => a.localOffset - b.localOffset\n    );\n    let expanded = 0;\n    for (const [i2, e] of ordered.entries()) {\n      const p = e.localOffset;\n      if (p + 30 > bytes.length || view.getUint32(p, true) !== 67324752)\n        throw new Error("Invalid local ZIP header.");\n      const flags = view.getUint16(p + 6, true), method = view.getUint16(p + 8, true), n = view.getUint16(p + 26, true), extra = view.getUint16(p + 28, true);\n      const start = p + 30 + n + extra, end = start + e.compressed;\n      if (flags !== e.flags || method !== e.method || start > bytes.length || end > e.directoryOffset || decoder.decode(bytes.subarray(p + 30, p + 30 + n)) !== e.name)\n        throw new Error("Local ZIP entries disagree with central directory.");\n      if (i2 + 1 < ordered.length && end > ordered[i2 + 1].localOffset)\n        throw new Error("Overlapping ZIP entries.");\n      if (!(flags & 8) && (view.getUint32(p + 18, true) !== e.compressed || view.getUint32(p + 22, true) !== e.size))\n        throw new Error("Local ZIP sizes disagree with central directory.");\n      if (flags & 8) {\n        const limit = ordered[i2 + 1]?.localOffset ?? e.directoryOffset;\n        let localZip64 = false;\n        for (let q = p + 30 + n; q < start; ) {\n          if (q + 4 > start) throw new Error("Truncated ZIP extra field.");\n          const tag = view.getUint16(q, true), size2 = view.getUint16(q + 2, true);\n          if (q + 4 + size2 > start) throw new Error("Truncated ZIP extra field.");\n          if (tag === 1) localZip64 = true;\n          q += 4 + size2;\n        }\n        const signed = end + 4 <= limit && view.getUint32(end, true) === 134695760, descriptor = end + (signed ? 4 : 0), length = localZip64 ? 20 : 12;\n        if (descriptor + length > limit || view.getUint32(descriptor, true) !== e.crc)\n          throw new Error("Invalid ZIP data descriptor.");\n        const compressed = view.getUint32(descriptor + 4, true), size = view.getUint32(descriptor + (localZip64 ? 12 : 8), true);\n        if (compressed !== e.compressed || size !== e.size || localZip64 && (view.getUint32(descriptor + 8, true) !== 0 || view.getUint32(descriptor + 16, true) !== 0))\n          throw new Error("Invalid ZIP data descriptor sizes.");\n      }\n      const output = new Uint8Array(e.size);\n      let at = 0;\n      const accept = (data) => {\n        at += data.length;\n        expanded += data.length;\n        if (at > e.size || expanded > LIMITS.expanded)\n          throw new Error(`ZIP expansion limit exceeded: ${e.name}`);\n        output.set(data, at - data.length);\n      };\n      if (method === 0) accept(bytes.subarray(start, end));\n      else {\n        const inflate = new Inflate((data) => accept(data));\n        if (start === end) inflate.push(new Uint8Array(), true);\n        for (let pos = start; pos < end; pos += 16384) {\n          inflate.push(\n            bytes.subarray(pos, Math.min(pos + 16384, end)),\n            pos + 16384 >= end\n          );\n        }\n      }\n      if (at !== e.size || crc32(output) !== e.crc)\n        throw new Error(`ZIP checksum/length mismatch: ${e.name}`);\n      files.set(e.name, output);\n      await new Promise((r) => setTimeout(r, 0));\n    }\n    return files;\n  }\n  async function parseSketch(bytes, name) {\n    const entries = await extractZip(bytes);\n    const read = (path, required = true) => {\n      const data = entries.get(path);\n      if (!data) {\n        if (required) throw new Error(`Missing ${path}`);\n        return {};\n      }\n      try {\n        const value = JSON.parse(decoder.decode(data));\n        if (!value || typeof value !== "object" || Array.isArray(value))\n          throw new Error("expected object");\n        return value;\n      } catch (e) {\n        throw new Error(`Invalid JSON in ${path}: ${String(e)}`);\n      }\n    };\n    const document = read("document.json"), meta = read("meta.json"), user = read("user.json", false), version = Number(meta.version ?? document.version ?? 0);\n    if (!Number.isInteger(version) || version < 43)\n      throw new Error(\n        `Unsupported or missing Sketch document version: ${version}`\n      );\n    if (!Array.isArray(document.pages))\n      throw new Error("document.pages must be an array.");\n    const warnings = [], pages = document.pages.map(\n      (p) => p._ref ? read(`${p._ref}.json`) : p\n    );\n    const seen = /* @__PURE__ */ new Set();\n    let count = 0;\n    const validate = (n, depth) => {\n      if (depth > LIMITS.depth || ++count > LIMITS.layers)\n        throw new Error("Document layer depth/count exceeds limits.");\n      if (!n || typeof n !== "object" || typeof n._class !== "string" || !sourceId(n))\n        throw new Error("Layer is missing a class or identifier.");\n      if (seen.has(sourceId(n)))\n        throw new Error(`Duplicate layer ID: ${sourceId(n)}`);\n      seen.add(sourceId(n));\n      if (n.frame) {\n        for (const k of ["x", "y", "width", "height"])\n          if (typeof n.frame[k] !== "number" || !Number.isFinite(n.frame[k]))\n            throw new Error(`Invalid frame.${k}: ${sourceId(n)}`);\n      }\n      if (n.frame && (n.frame.width < 0 || n.frame.height < 0))\n        throw new Error("Negative layer dimensions.");\n      if (n.layers !== void 0 && !Array.isArray(n.layers))\n        throw new Error("Invalid children list.");\n      for (const c of n.layers ?? []) validate(c, depth + 1);\n    };\n    for (const p of pages) validate(p, 0);\n    const documentId = String(document.do_objectID ?? meta.documentID ?? "");\n    if (!documentId)\n      throw new Error(\n        "Document has no stable identifier; safe reimport identity cannot be established."\n      );\n    if (![123, 144, 182, 196].includes(version))\n      warnings.push({\n        code: "UNVERIFIED_SOURCE_VERSION",\n        severity: "warning",\n        message: `Source version ${version} is outside the exercised fixture versions (123, 144, 182, 196). Unknown properties are retained and reported.`\n      });\n    const assets = [...entries].filter(([p]) => p.startsWith("images/") || p.startsWith("fonts/")).map(([path, bytes2]) => ({ path, bytes: bytes2 }));\n    return {\n      name,\n      documentId,\n      version,\n      document,\n      meta,\n      user,\n      pages,\n      assets,\n      digest: fingerprint({ document, pages }),\n      warnings\n    };\n  }\n\n  // src/sketch/worker.ts\n  self.onmessage = async (e) => {\n    try {\n      const file = await parseSketch(new Uint8Array(e.data.bytes), e.data.name);\n      self.postMessage({ id: e.data.id, file });\n    } catch (error) {\n      self.postMessage({ id: e.data.id, error: String(error) });\n    }\n  };\n})();\n'], { type: "text/javascript" })
+    );
+    try {
+      worker = new Worker(url);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    worker.onmessage = (event) => {
+      const item = queue.find((q) => q.id === event.data.id);
+      if (item) void acceptParsed(item, event.data.file, event.data.error);
+    };
+    worker.onerror = (event) => {
+      worker?.terminate();
+      worker = void 0;
+      for (const item of queue)
+        if (item.parsing && !item.file) {
+          item.parsing = false;
+          item.error = "Archive reader failed. Remove and retry.";
+        }
+      status(event.message || "Archive reader failed. Remove and retry.", true);
+      render();
+    };
+  } catch {
+  }
+  async function addSketch(source) {
+    const item = { id: requestId2(), source, parsing: true };
+    queue.push(item);
+    render();
+    try {
+      const bytes = await source.arrayBuffer();
+      if (!queue.includes(item)) return;
+      if (worker)
+        worker.postMessage({ id: item.id, name: source.name, bytes }, [bytes]);
+      else
+        await acceptParsed(
+          item,
+          await parseSketch(new Uint8Array(bytes), source.name)
+        );
+    } catch (error) {
+      await acceptParsed(item, void 0, message(error));
+    }
+  }
+  async function attachTokens(source) {
+    const revision = ++tokenRevision;
+    tokenLoading = true;
+    tokenName = source.name;
+    tokenError = "";
+    tokens = void 0;
+    render();
+    try {
+      const value2 = validateTokens(JSON.parse(await source.text()));
+      if (revision === tokenRevision) {
+        tokens = value2;
+        status("");
+      }
+    } catch (error) {
+      if (revision === tokenRevision) {
+        tokenError = message(error);
+        status(`${source.name}: ${tokenError}`, true);
+      }
+    } finally {
+      if (revision === tokenRevision) {
+        tokenLoading = false;
+        render();
+      }
+    }
+  }
+  async function addFiles(files) {
+    if (running) return;
+    status("");
+    await Promise.all(
+      files.map((file) => {
+        if (/\.sketch$/i.test(file.name)) return addSketch(file);
+        if (/\.json$/i.test(file.name)) return attachTokens(file);
+        status(`${file.name}: expected .sketch or token JSON.`, true);
+      })
+    );
+  }
+  $("drop").onclick = () => $("files").click();
+  $("files").onchange = (event) => {
+    const input = event.target;
+    void addFiles([...input.files ?? []]);
+    input.value = "";
+  };
+  for (const type of ["dragover", "dragleave", "drop"])
+    document.addEventListener(type, (event) => {
+      event.preventDefault();
+      if (running) return;
+      $("drop").classList.toggle("drag", type === "dragover");
+      if (type === "drop")
+        void addFiles([...event.dataTransfer?.files ?? []]);
+    });
+  async function importBatch() {
+    if (running || $("import").hasAttribute("disabled")) return;
+    const input = [...queue], options = {
+      ...DEFAULT_OPTIONS,
+      resourceTypes: Object.fromEntries(
+        kinds.map((kind) => [kind, $(kind).checked])
+      ),
+      tokens
+    };
+    const missing = [
+      ...new Set(input.flatMap((q) => importFontNames(q.file, options)))
+    ].filter(
+      (name) => !matchFont(
+        name,
+        fonts.map((fontName2) => ({ fontName: fontName2 }))
+      )
+    );
+    if (missing.length) {
+      status(`Missing fonts: ${missing.join(", ")}`, true);
+      return;
+    }
+    running = true;
+    reportOpen = false;
+    reports.length = 0;
+    $("report-list").replaceChildren();
+    cancelled = false;
+    render();
+    const summaries = [];
+    let issues = false;
+    try {
+      for (const [i2, item] of input.entries()) {
+        if (cancelled) break;
+        const id = currentRequest = requestId2();
+        status(
+          input.length > 1 ? `Importing ${i2 + 1}/${input.length} \xB7 ${item.source.name}` : `Importing ${item.source.name}\u2026`
+        );
+        $("progress").removeAttribute("value");
+        const result = new Promise(
+          (resolve, reject) => pending.set(id, { resolve, reject })
+        );
+        post({
+          type: "import",
+          requestId: id,
+          file: nativePayload(item.file),
+          options
+        });
+        const report = await result;
+        reports.push({ ...report, file: report.file ?? item.source.name });
+        hasSavedReport = true;
+        const { issueCount } = focusedReport(report);
+        issues || (issues = report.state !== "complete" || issueCount > 0);
+        summaries.push(
+          `${input.length > 1 ? item.source.name + ": " : ""}${report.state === "complete" ? "Imported" : report.state === "cancelled" ? "Cancelled" : "Failed"}${issueCount ? ` \xB7 ${issueCount} issue${issueCount === 1 ? "" : "s"}` : ""}`
+        );
+        if (report.state !== "complete") break;
+      }
+      if (cancelled && !summaries.some((s) => s.includes("Cancelled")))
+        summaries.push("Cancelled");
+      status(summaries.join("\n"), issues);
+    } catch (error) {
+      status(message(error), true);
+    } finally {
+      running = false;
+      currentRequest = void 0;
+      render();
+    }
+  }
+  function showReports() {
+    const list = $("report-list");
+    list.replaceChildren();
+    for (const report of reports)
+      renderReport(
+        list,
+        report,
+        (targetId) => post({ type: "select-layer", targetId })
+      );
+    reportOpen = true;
+    render();
+  }
+  $("view-report").onclick = () => {
+    if (running || readingReport) return;
+    if (reports.length) showReports();
+    else {
+      readingReport = true;
+      post({ type: "get-report" });
+      render();
+    }
+  };
+  $("report-back").onclick = () => {
+    reportOpen = false;
+    render();
+  };
+  $("import").onclick = () => void importBatch();
+  $("cancel").onclick = () => {
+    if (!running) return;
+    cancelled = true;
+    post({ type: "cancel" });
+    status("Cancelling\u2026");
+    render();
+  };
+  window.onmessage = (event) => {
+    const m = readPluginMessage(event.data);
+    if (!m) return;
+    if (m.type === "ready") {
+      initialized = true;
+      hasSavedReport = m.hasReport === true;
+      fonts = m.fonts;
+      render();
+    }
+    if (m.type === "progress" && running && !cancelled && m.requestId === currentRequest)
+      status(`Importing \xB7 ${m.done} layers`);
+    if (m.type === "report") {
+      pending.get(m.requestId)?.resolve(m.report);
+      pending.delete(m.requestId);
+    }
+    if (m.type === "saved-report" && readingReport) {
+      readingReport = false;
+      if (!running) {
+        reports.length = 0;
+        reports.push(m.report);
+        showReports();
+      }
+    }
+    if (m.type === "error") {
+      readingReport = false;
+      render();
+      if (m.requestId) {
+        pending.get(m.requestId)?.reject(new Error(m.message));
+        pending.delete(m.requestId);
+      } else status(m.message, true);
+    }
+  };
+  post({ type: "ui-ready" });
+  render();
+})();
+
+    </script>
+  </body>
+</html>

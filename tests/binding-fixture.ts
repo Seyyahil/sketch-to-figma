@@ -1,0 +1,22 @@
+import type { Sketch, SketchFile } from "../src/core/types";
+/** Isolated relationship input for unit tests; never imported by the plugin UI. */
+export function bindingFixture():SketchFile {
+ const color=(id?:string):Sketch=>({_class:"color",red:.2,green:.4,blue:.8,alpha:1,...id?{swatchID:id}:{}});
+ const attrs:Sketch={MSAttributedStringFontAttribute:{_class:"fontDescriptor",attributes:{name:"Inter-Regular",size:16}},MSAttributedStringColorAttribute:color("C"),kerning:.5,paragraphStyle:{_class:"paragraphStyle",alignment:0,minimumLineHeight:24,maximumLineHeight:24,paragraphSpacing:8,firstLineHeadIndent:2}};
+ const sharedText={_class:"sharedStyle",do_objectID:"TS",name:"Body / Regular",value:{_class:"style",textStyle:{_class:"textStyle",encodedAttributes:attrs}}};
+ const style:Sketch={fills:[{fillType:1,isEnabled:true,gradient:{gradientType:0,from:"{0, 0.5}",to:"{1, 0.5}",stops:[{position:0,color:color("C")},{position:1,color:color("C2")} ]}}],borders:[{fillType:0,isEnabled:true,thickness:2,position:1,color:color("C")}],shadows:[{isEnabled:true,color:color("C2"),offsetX:1,offsetY:2,blurRadius:4,spread:0}]};
+ const text=(id:string,content:string):Sketch=>({_class:"text",do_objectID:id,name:id,sharedStyleID:"TS",frame:{x:8,y:8,width:160,height:48},textBehaviour:2,style:{textStyle:{encodedAttributes:structuredClone(attrs)}},attributedString:{_class:"attributedString",string:content,attributes:[{location:0,length:content.length,attributes:structuredClone(attrs)}]}});
+ const master:Sketch={_class:"symbolMaster",do_objectID:"MASTER",symbolID:"S",name:"Button / Primary",frame:{x:0,y:0,width:180,height:64},layers:[text("T","Default")],overrideProperties:[{overrideName:"T_stringValue",canOverride:true},{overrideName:"T_isVisible",canOverride:true}]};
+ const second:Sketch={_class:"symbolMaster",do_objectID:"MASTER2",symbolID:"S2",name:"Button / Secondary",frame:{x:220,y:0,width:180,height:64},layers:[text("T2","Secondary")]};
+ const nested:Sketch={_class:"symbolMaster",do_objectID:"OUTER",symbolID:"OUT",name:"Nested button",frame:{x:0,y:100,width:200,height:80},layers:[{_class:"symbolInstance",do_objectID:"INNER",symbolID:"S",name:"Inner",frame:{x:0,y:0,width:180,height:64},overrideValues:[]}],overrideProperties:[{overrideName:"INNER_symbolID",canOverride:true}]};
+ const mixed=text("MIXED","Small Large");mixed.frame={x:0,y:300,width:250,height:60};mixed.attributedString.attributes=[{location:0,length:6,attributes:structuredClone(attrs)},{location:6,length:5,attributes:{...structuredClone(attrs),MSAttributedStringFontAttribute:{_class:"fontDescriptor",attributes:{name:"Inter-Regular",size:26}}}}];
+ return {name:"binding-regression.sketch",documentId:"BINDINGS",version:144,digest:"regression-v1",meta:{version:144},user:{},assets:[],warnings:[],document:{do_objectID:"BINDINGS",colorSpace:1,sharedSwatches:{objects:[{_class:"swatch",do_objectID:"C",name:"Brand / Blue",value:color()},{_class:"swatch",do_objectID:"C2",name:"Brand / Green",value:{...color(),red:.1,green:.7,blue:.3}}]},layerTextStyles:{objects:[sharedText]},layerStyles:{objects:[{_class:"sharedStyle",do_objectID:"LS",name:"Surface / Gradient",value:structuredClone(style)}]}},pages:[{_class:"page",do_objectID:"P",name:"Bindings regression",layers:[master,second,nested,mixed,{_class:"rectangle",do_objectID:"R",name:"Gradient and shadow",sharedStyleID:"LS",frame:{x:0,y:400,width:180,height:80},style:structuredClone(style)},{_class:"symbolInstance",do_objectID:"I",symbolID:"S",name:"Linked button",frame:{x:250,y:100,width:180,height:64},overrideValues:[{overrideName:"T_stringValue",value:"Custom"}]},{_class:"symbolInstance",do_objectID:"NI",symbolID:"OUT",name:"Nested override",frame:{x:250,y:200,width:200,height:80},overrideValues:[{overrideName:"INNER/T_stringValue",value:"Nested custom"}]}]}]};
+}
+export function changedBindings(f:SketchFile):SketchFile {
+ const next=structuredClone(f);next.digest="regression-v2";
+ const master=next.pages[0].layers.find((n:Sketch)=>n.do_objectID==="MASTER");master.name="Button / Updated";master.layers[0].attributedString.string="Updated";
+ const instance=next.pages[0].layers.find((n:Sketch)=>n.do_objectID==="I");instance.symbolID="S2";instance.overrideValues=[];
+ next.document.sharedSwatches.objects[0].value.red=.8;
+ next.document.layerTextStyles.objects[0].value.textStyle.encodedAttributes.MSAttributedStringFontAttribute.attributes.size=18;
+ return next;
+}

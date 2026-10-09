@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sketch → Figma</title>
+    <style>
+      /* THEME_CSS */
+    </style>
+  </head>
+  <body>
+    <main id="import-panel" aria-busy="false">
+      <div
+        id="import-indicator"
+        class="import-indicator"
+        role="img"
+        aria-label="Importing Sketch into Figma"
+        hidden
+      >
+        <svg
+          class="sketch-mark"
+          width="48"
+          height="44"
+          viewBox="0 0 48 44"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path d="M10 3 24 1 38 3 48 17 24 43 0 17Z" fill="#FDB300" />
+          <path d="M0 17 10 3 14 17Z" fill="#FDD231" />
+          <path d="M10 3 24 1 14 17Z" fill="#FEDF72" />
+          <path d="M24 1 38 3 34 17Z" fill="#FEEEB7" />
+          <path d="M38 3 48 17 34 17Z" fill="#FDD231" />
+          <path d="M24 1 34 17H14Z" fill="#FFF3CB" />
+          <path d="M0 17H14L24 43Z" fill="#EA6C00" />
+          <path d="M34 17H48L24 43Z" fill="#EA6C00" />
+          <path d="M14 17H34L24 43Z" fill="#FDAD00" />
+        </svg>
+        <svg
+          class="transfer-mark"
+          width="112"
+          height="48"
+          viewBox="0 0 112 48"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path class="transfer-line" d="M0 24H112" />
+          <g class="transfer-file">
+            <g transform="translate(0 14)">
+              <path class="transfer-file-sheet" d="M1 1h8l5 5v13H1Z" />
+              <path d="M9 1v5h5M4 10h7M4 14h5" />
+            </g>
+          </g>
+          <g class="transfer-file transfer-file-second">
+            <g transform="translate(0 14)">
+              <path class="transfer-file-sheet" d="M1 1h8l5 5v13H1Z" />
+              <path d="M9 1v5h5M4 10h7M4 14h5" />
+            </g>
+          </g>
+        </svg>
+        <svg
+          class="figma-mark"
+          width="32"
+          height="48"
+          viewBox="0 0 32 48"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path d="M8 48a8 8 0 0 0 8-8v-8H8a8 8 0 0 0 0 16Z" fill="#0ACF83" />
+          <path d="M0 24a8 8 0 0 1 8-8h8v16H8a8 8 0 0 1-8-8Z" fill="#A259FF" />
+          <path d="M0 8a8 8 0 0 1 8-8h8v16H8a8 8 0 0 1-8-8Z" fill="#F24E1E" />
+          <path d="M16 0h8a8 8 0 0 1 0 16h-8Z" fill="#FF7262" />
+          <circle cx="24" cy="24" r="8" fill="#1ABCFE" />
+        </svg>
+      </div>
+      <div id="import-content" class="content">
+        <input id="files" type="file" accept=".sketch" multiple hidden />
+        <button id="drop" class="drop" aria-label="Choose or drop Sketch files">
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M9 4H4v16h16v-5M12 3v11m-4-4 4 4 4-4M12 3h8"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span>Click or drop .sketch files</span>
+        </button>
+        <ul id="queue" aria-label="Sketch files"></ul>
+        <fieldset id="resources" aria-label="Include unused resources">
+          <label class="option"
+            ><input id="colors" type="checkbox" role="switch" checked /><span
+              >Color variables</span
+            ></label
+          >
+          <label class="option"
+            ><input
+              id="layerStyles"
+              type="checkbox"
+              role="switch"
+              checked
+            /><span>Layer styles</span></label
+          >
+          <label class="option"
+            ><input
+              id="textStyles"
+              type="checkbox"
+              role="switch"
+              checked
+            /><span>Text styles</span></label
+          >
+          <label class="option"
+            ><input
+              id="components"
+              type="checkbox"
+              role="switch"
+              checked
+            /><span>Symbols</span></label
+          >
+          <label class="option"
+            ><input id="tokens" type="checkbox" role="switch" checked /><span
+              >Tokens</span
+            ></label
+          >
+        </fieldset>
+        <div id="token-name" class="attachment" hidden></div>
+      </div>
+      <section
+        id="report-panel"
+        class="content"
+        aria-labelledby="report-title"
+        hidden
+      >
+        <div class="report-heading">
+          <h2 id="report-title">Import report</h2>
+          <button id="report-back" class="secondary">Back</button>
+        </div>
+        <div id="report-list"></div>
+      </section>
+    </main>
+    <footer id="import-footer">
+      <div id="status" role="status" aria-live="polite"></div>
+      <progress id="progress" aria-label="Import progress" hidden></progress>
+      <button id="view-report" class="secondary view-report" hidden>
+        View failed checks
+      </button>
+      <div class="actions">
+        <button id="cancel" class="secondary" hidden>Cancel</button
+        ><button id="import" class="primary" disabled>Import</button>
+      </div>
+    </footer>
+    <script>
+      /* UI_BUNDLE */
+    </script>
+  </body>
+</html>
