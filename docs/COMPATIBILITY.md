@@ -15,7 +15,9 @@ Audited against @figma/plugin-typings 1.141.0 on 2026-10-08. This is a capabilit
 | 2 | Grids | layoutGrids | N for square, stretch, center, left, right |
 | 2 | Rulers/guides | guides | N offsets; UI visibility U |
 | 3 | Symbol source/instance/nesting | createComponent, createInstance | N; dependency ordering required |
-| 3 | Text/image/visibility overrides | characters, fills, visible | N with source path resolution |
+| 3 | Text/image/visibility/alignment overrides | characters, fills, visible, textAlignHorizontal | N with source path resolution; stale paths are reported |
+| 3 | Named font-trait overrides | loadFontAsync, setRangeFontName | P; verified regular/bold/italic named faces only; original style binding depends on exact host acceptance |
+| 3 | Shadow color overrides | effects, setBoundVariableForEffect | N for addressed drop/inner-shadow color and explicit source alias; missing effects/aliases are reported |
 | 3 | Nested symbol swap | swapComponent | N if source component resolved |
 | 3 | Style/tint overrides | style binding/fills | P; inherited tint semantics differ |
 | 3 | Enabled override controls | addComponentProperty, componentPropertyReferences | P; not all Sketch controls map |
@@ -40,7 +42,7 @@ Audited against @figma/plugin-typings 1.141.0 on 2026-10-08. This is a capabilit
 | 5 | OpenType features | openTypeFeatures/getRangeOpenTypeFeatures readonly | U writes in installed API |
 | 5 | Super/subscript | supported OpenType or source metadata | U arbitrary baseline positioning |
 | 6 | Stacks | layoutMode/wrap/spacing/padding/sizing | P; all 181 Test Stacks exercised, with Fit/Fill cycle findings and native geometry failures |
-| 6 | Legacy Smart Layout | groupLayout → auto layout | P; different resizing semantics |
+| 6 | Legacy Smart Layout | measured Auto Layout or editable freeform frame | P; linear geometry/paint order must match before enabling flow; overlapping or incompatible layouts keep source positions and report responsive limitations |
 | 6 | Space between | primaryAxisAlignItems SPACE_BETWEEN | N |
 | 6 | Space around/evenly | primaryAxisAlignItems SPACE_AROUND / SPACE_EVENLY | N; numeric Sketch 4/5 and explicit sidecar Around/Evenly; horizontal/vertical regressions and prior native readback verify positions |
 | 6 | Per-child alignment | layoutAlign, layoutGrow | P limited independent alignment |
@@ -110,3 +112,9 @@ Sketch defines border-inclusive layout in terms of protruding child borders. Fig
 Boolean mapping references: [Sketch operation enum](https://raw.githubusercontent.com/sketch-hq/sketch-document/main/packages/file-format/schema/enums/boolean-operation.schema.yaml), [Sketch fill rules](https://raw.githubusercontent.com/sketch-hq/sketch-document/main/packages/file-format/schema/enums/winding-rule.schema.yaml), [Figma vector regions](https://developers.figma.com/docs/plugins/api/VectorNetwork/), [Figma boolean operations](https://developers.figma.com/docs/plugins/api/figma/) and [native child stacking order](https://developers.figma.com/docs/plugins/api/properties/nodes-children/). Operation/contour readbacks do not certify rendered pixels.
 
 Modern native operand constraints: [Figma fill/stroke geometry and unsupported Frame operands](https://help.figma.com/hc/en-us/articles/360039957534-Boolean-operations), [Sketch combined shapes](https://www.sketch.com/docs/designing/shapes/boolean-operations/). Copy-based operands are reported as editable equivalents, with original subtrees and bindings retained.
+
+## Large-document compatibility corrections (revision 11, 2026-10-19)
+
+Private version-173 and version-196 archive checks exposed legacy Smart Layout reflow, explicit empty Symbol slots and additional source override kinds. These now have general conversion paths and regressions. The version-173 archive parses without importer caps; worker asset buffers transfer instead of cloning. Browser image decoding, Figma memory limits and native rendering are separate acceptance gates.
+
+Border/resource validation reads operative compound geometry and retained outline-mask paint layers. It does not hide unresolved color aliases, stale override paths or incompatible original Text Style bindings. No new source resources are inferred. See VALIDATION.md for measured coverage and remaining failures.

@@ -6,6 +6,9 @@ import { bindingFixture, changedBindings } from "./binding-fixture";
 import { createHost } from "./mock-figma";
 import { startImport } from "../src/figma/importer";
 import { DEFAULT_OPTIONS, type Sketch } from "../src/core/types";
+import { preflight } from "../src/sketch/preflight";
+import { overrideTarget } from "../src/figma/symbols";
+import { matchFont } from "../src/figma/typography";
 import {
   readIndex,
   writeIndex,
@@ -21,6 +24,129 @@ const options = {
 function target(h: ReturnType<typeof createHost>, id: string) {
   return h.nodes.get(readIndex(h.api, "BINDINGS").nodes[id].nodeId);
 }
+it.each(["Medium", "SemiBold", "Bold", "Medium-Italic"])(
+  "resolves explicit variable-font named face %s without substituting another weight",
+  (face) => {
+    const style = face === "SemiBold" ? "Semi Bold" : face.replace("-", " ");
+    const fonts = [
+      { fontName: { family: "Inter", style: "Regular" } },
+      { fontName: { family: "Inter", style } },
+    ];
+    expect(matchFont(`Inter-Regular_${face}`, fonts)).toEqual(
+      fonts[1].fontName,
+    );
+    expect(matchFont(`Inter-Regular_${face}`, [fonts[0]])).toBeUndefined();
+  },
+);
+it("applies source alignment and named bold overrides without inventing Text Styles", async () => {
+  const h = createHost(),
+    file = bindingFixture();
+  const available = h.api.listAvailableFontsAsync;
+  h.api.listAvailableFontsAsync = async () => [
+    ...(await available()),
+    { fontName: { family: "Inter", style: "Bold" } },
+  ];
+  const source = file.pages[0].layers.find(
+    (n: Sketch) => n.do_objectID === "I",
+  );
+  source.overrideValues.push(
+    { overrideName: "T_textHAlign", value: "center" },
+    {
+      overrideName: "T_textWeight",
+      value: {
+        NSCTFontSymbolicTrait: 2,
+        NSCTFontProportionTrait: 0,
+        NSCTFontSlantTrait: 0,
+        NSCTFontWeightTrait: 0.4000000059604645,
+      },
+    },
+  );
+  const report = await startImport(h.api, file, options).result;
+  const text = overrideTarget(target(h, "I"), ["T"]) as TextNode;
+  expect(text.textAlignHorizontal).toBe("CENTER");
+  expect(text.getRangeFontName(0, text.characters.length)).toEqual({
+    family: "Inter",
+    style: "Bold",
+  });
+  expect(report.findings.filter((f) => f.code === "API_REJECTED")).toEqual([]);
+  expect([...h.styles.values()].filter((s) => s.type === "TEXT")).toHaveLength(
+    1,
+  );
+});
+it("applies shadow color overrides including transparent colors and removes stale aliases", async () => {
+  const h = createHost(),
+    file = bindingFixture();
+  const master = file.pages[0].layers.find(
+    (n: Sketch) => n.do_objectID === "MASTER",
+  );
+  const shadow = (enabled: boolean) => ({
+    isEnabled: enabled,
+    color: { red: 0.2, green: 0.4, blue: 0.8, alpha: 1, swatchID: "C" },
+    blurRadius: 4,
+    offsetX: 2,
+    offsetY: 3,
+    spread: 1,
+  });
+  master.layers.push({
+    _class: "rectangle",
+    do_objectID: "SHADOW",
+    name: "Shadow",
+    frame: { x: 0, y: 0, width: 20, height: 20 },
+    style: {
+      shadows: [shadow(false), shadow(true)],
+      innerShadows: [shadow(true)],
+    },
+  });
+  const source = file.pages[0].layers.find(
+    (n: Sketch) => n.do_objectID === "I",
+  );
+  source.overrideValues.push(
+    {
+      overrideName: "SHADOW_color:shadow-1",
+      value: { red: 0, green: 0, blue: 0, alpha: 0 },
+    },
+    {
+      overrideName: "SHADOW_color:innerShadow-0",
+      value: { red: 0.1, green: 0.7, blue: 0.3, alpha: 1, swatchID: "C2" },
+    },
+  );
+  const report = await startImport(h.api, file, options).result;
+  const node = overrideTarget(target(h, "I"), ["SHADOW"]) as RectangleNode;
+  expect(node.effects[0].visible).toBe(false);
+  expect((node.effects[1] as DropShadowEffect).color.a).toBe(0);
+  expect(
+    (node.effects[1] as DropShadowEffect).boundVariables?.color,
+  ).toBeUndefined();
+  expect((node.effects[1] as DropShadowEffect).offset).toEqual({ x: 2, y: 3 });
+  expect((node.effects[2] as InnerShadowEffect).boundVariables?.color?.id).toBe(
+    readIndex(h.api, file.documentId).resources["color:C2"],
+  );
+  expect(report.findings.filter((f) => f.code === "API_REJECTED")).toEqual([]);
+});
+it("preserves intentional No Symbol placeholders without a missing component error or duplication", async () => {
+  const h = createHost(),
+    file = bindingFixture();
+  const source = file.pages[0].layers.find(
+    (n: Sketch) => n.do_objectID === "I",
+  );
+  source.symbolID = "";
+  source.isVisible = false;
+  source.overrideValues = [];
+  expect(preflight(file).missingSymbols).toEqual([]);
+  const first = await startImport(h.api, file, options).result;
+  expect(target(h, "I").type).toBe("FRAME");
+  expect(target(h, "I").visible).toBe(false);
+  expect(target(h, "I").children).toHaveLength(0);
+  expect(first.findings.filter((f) => f.code === "MISSING_SYMBOL")).toEqual([]);
+  expect(
+    first.validations.find(
+      (v) => v.kind === "component-link" && v.sourceId === "I",
+    )?.passed,
+  ).toBe(true);
+  const second = await startImport(h.api, file, options).result;
+  expect(second.created).toBe(0);
+  expect(second.findings.filter((f) => f.code === "TYPE_CONFLICT")).toEqual([]);
+});
 it("keeps named variable bindings in text, gradient stops, strokes and shadows", async () => {
   const h = createHost(),
     f = bindingFixture(),

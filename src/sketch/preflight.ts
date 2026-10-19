@@ -2,6 +2,7 @@ import { masters, dependencyOrder } from "../core/dependencies";
 import {
   sourceId,
   walkLayers,
+  isEmptySymbol,
   type Preflight,
   type Sketch,
   type SketchFile,
@@ -61,6 +62,7 @@ export function preflight(
           .filter(
             (n) =>
               n._class === "symbolInstance" &&
+              !isEmptySymbol(n) &&
               !available.has(String(n.symbolID)),
           )
           .map((n) => String(n.symbolID)),

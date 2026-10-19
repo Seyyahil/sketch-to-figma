@@ -1,7 +1,25 @@
 import { applyTiledBitmap } from "./tiled-images";
 import { clamp, finite, gradientTransform } from "../core/math";
-import type { Sketch } from "../core/types";
+import { sourceId, type Sketch } from "../core/types";
 import type { ImportContext } from "./context";
+/** Combined geometry owns its paint on the operative child, not its source wrapper. */
+export function appearanceNode(source: Sketch, node: SceneNode): SceneNode {
+  if (source.hasClippingMask && source.clippingMaskMode === 0 && node.parent) {
+    const painted = node.parent.children.find(
+      (child) =>
+        child.getPluginData("sketch2figma:wrapper") === "outline-paint" &&
+        child.getPluginData("sketch2figma:paintFor") === sourceId(source),
+    );
+    if (painted) node = painted;
+  }
+  return source._class === "shapeGroup" && "children" in node
+    ? (node.children.find(
+        (child) =>
+          child.getPluginData("sketch2figma:wrapper") === "boolean" &&
+          !child.getPluginData("sketch2figma:obsolete"),
+      ) ?? node)
+    : node;
+}
 const BLENDS: BlendMode[] = [
   "NORMAL",
   "DARKEN",

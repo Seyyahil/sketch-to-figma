@@ -57,15 +57,24 @@ export function requiredSymbols(
 ): Set<string> {
   const result = new Set<string>();
   function add(id: string) {
-    if (result.has(id)) return;
+    if (!id || result.has(id)) return;
     result.add(id);
     const s = available.get(id);
     if (s)
       for (const n of walkLayers(s.layers ?? []))
-        if (n._class === "symbolInstance") {add(String(n.symbolID));for(const o of n.overrideValues??[])if(String(o.overrideName).endsWith("_symbolID")&&o.value)add(String(o.value));}
+        if (n._class === "symbolInstance") {
+          add(String(n.symbolID));
+          for (const o of n.overrideValues ?? [])
+            if (String(o.overrideName).endsWith("_symbolID") && o.value)
+              add(String(o.value));
+        }
   }
   for (const n of walkLayers(pages))
-    if (scope.has(sourceId(n)) && n._class === "symbolInstance")
-      {add(String(n.symbolID));for(const o of n.overrideValues??[])if(String(o.overrideName).endsWith("_symbolID")&&o.value)add(String(o.value));}
+    if (scope.has(sourceId(n)) && n._class === "symbolInstance") {
+      add(String(n.symbolID));
+      for (const o of n.overrideValues ?? [])
+        if (String(o.overrideName).endsWith("_symbolID") && o.value)
+          add(String(o.value));
+    }
   return result;
 }

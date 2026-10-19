@@ -9,6 +9,7 @@ import {
   ownSource,
   sourceId,
   walkLayers,
+  isEmptySymbol,
   type ConversionReport,
   type ImportOptions,
   type LayerAudit,
@@ -27,7 +28,7 @@ import {
   recover,
   type JournalData,
 } from "./storage";
-import { applyAppearance } from "./appearance";
+import { appearanceNode, applyAppearance } from "./appearance";
 import { applyGeometry, createNode } from "./geometry";
 import { applyText, loadCurrentFonts } from "./typography";
 import { applyChildLayout, applyGuidesGrids, applyLayout } from "./layout";
@@ -278,7 +279,9 @@ export function startImport(
         if (
           (node.type === "INSTANCE" && s._class !== "symbolInstance") ||
           (node.type === "COMPONENT" && s._class !== "symbolMaster") ||
-          (s._class === "symbolInstance" && node.type !== "INSTANCE")
+          (s._class === "symbolInstance" &&
+            !isEmptySymbol(s) &&
+            node.type !== "INSTANCE")
         ) {
           c.finding(
             "TYPE_CONFLICT",
@@ -296,7 +299,7 @@ export function startImport(
           await loadCurrentFonts(c, node);
         report.updated++;
       } else {
-        if (s._class === "symbolInstance") {
+        if (s._class === "symbolInstance" && !isEmptySymbol(s)) {
           const component = c.resources.components.get(String(s.symbolID));
           if (component) node = component.createInstance();
           else {
@@ -309,7 +312,11 @@ export function startImport(
               "error",
             );
           }
-        } else node = createNode(c, s);
+        } else
+          node = createNode(
+            c,
+            isEmptySymbol(s) ? { ...s, _class: "emptySymbol" } : s,
+          );
         journal.track(node);
         report.created++;
       }
@@ -343,8 +350,25 @@ export function startImport(
         if (node.type === "TEXT" && !c.resources.texts.has(s.sharedStyleID))
           await node.setTextStyleIdAsync("");
       }
+      // Rebuild mutable containers in source coordinates. A previous Auto Layout
+      // would otherwise move descendants before their layout is reconstructed.
+      if (
+        "layoutMode" in node &&
+        node.type !== "INSTANCE" &&
+        node.layoutMode !== "NONE"
+      ) {
+        node.primaryAxisSizingMode = "FIXED";
+        node.counterAxisSizingMode = "FIXED";
+        node.layoutMode = "NONE";
+      }
       await applyGeometry(c, s, node);
       if (s._class !== "shapeGroup") await applyAppearance(c, s, node);
+      if (isEmptySymbol(s))
+        c.ledger(s).mark(
+          "/symbolID",
+          "Editable Equivalent",
+          "Explicitly empty Sketch Symbol retained as an empty editable frame; no component invented.",
+        );
       if (
         (node.type === "TEXT" || node.type === "TEXT_PATH") &&
         s._class === "text"
@@ -414,18 +438,7 @@ export function startImport(
         c.ledger(s).mark("/symbolID");
       }
       await applyGuidesGrids(c, s, node);
-      if (node.type !== "TEXT")
-        await bindStyles(
-          c,
-          s,
-          s._class === "shapeGroup" && "children" in node
-            ? (node.children.find(
-                (child) =>
-                  child.getPluginData("sketch2figma:wrapper") === "boolean" &&
-                  !child.getPluginData("sketch2figma:obsolete"),
-              ) ?? node)
-            : node,
-        );
+      if (node.type !== "TEXT") await bindStyles(c, s, appearanceNode(s, node));
       c.ledger(s).result.targetId = node.id;
       writeData(node, "source", ownSource(s));
       return node;
@@ -728,6 +741,7 @@ async function reconstructMasks(
       appearance.isMask = false;
       appearance.name = `Mask appearance / ${source.name}`;
       appearance.setPluginData("sketch2figma:wrapper", "outline-paint");
+      appearance.setPluginData("sketch2figma:paintFor", sourceId(source));
       appearance.setPluginData("sketch2figma:documentId", ctx.file.documentId);
       const container = mask.parent! as BaseNode & ChildrenMixin;
       const position = mask.relativeTransform;
@@ -763,7 +777,12 @@ async function reconstructMasks(
             (p) => p.visible !== false && (p.opacity ?? 1) > 0,
           ))
       ) {
-        geometry.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+        // Inactive source paints still own resource bindings. Add operative
+        // mask coverage without replacing those editable source paints.
+        geometry.fills = [
+          ...(typeof geometry.fills === "symbol" ? [] : geometry.fills),
+          { type: "SOLID", color: { r: 1, g: 1, b: 1 } },
+        ];
       }
       if ("effects" in geometry) geometry.effects = [];
       ctx.finding(

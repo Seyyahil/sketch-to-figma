@@ -1,3 +1,4 @@
+import { applySmartLayout } from "./smart-layout";
 import { applySerializedStack, applySerializedItem } from "./serialized-layout";
 import { finite } from "../core/math";
 import type { Sketch } from "../core/types";
@@ -97,53 +98,8 @@ export async function applyLayout(
   if (await applySerializedStack(ctx, s, node)) return;
   const gl = s.groupLayout,
     l = ctx.ledger(s);
-  if (gl?._class === "MSImmutableInferredGroupLayout") {
-    const horizontal = gl.axis === 0,
-      children = (s.layers ?? []).filter((n: Sketch) => n.isVisible !== false),
-      axis = horizontal ? "x" : "y",
-      size = horizontal ? "width" : "height";
-    const sorted = [...children].sort((a, b) => a.frame[axis] - b.frame[axis]);
-    const gaps = sorted
-      .slice(1)
-      .map(
-        (n, i) => n.frame[axis] - sorted[i].frame[axis] - sorted[i].frame[size],
-      );
-    const gap = gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0;
-    const start = sorted[0]?.frame[axis] ?? 0;
-    const far = Math.max(
-      0,
-      ...children.map((c: Sketch) => c.frame[axis] + c.frame[size]),
-    );
-    await ctx.attempt(
-      s,
-      "/groupLayout",
-      () => {
-        node.layoutMode = horizontal ? "HORIZONTAL" : "VERTICAL";
-        node.primaryAxisSizingMode = "FIXED";
-        node.counterAxisSizingMode = "FIXED";
-        node.itemSpacing = gap;
-        node.primaryAxisAlignItems =
-          (["MIN", "CENTER", "MAX"] as const)[gl.layoutAnchor ?? 0] ?? "MIN";
-        node.counterAxisAlignItems = "MIN";
-        if (horizontal) {
-          node.paddingLeft = Math.max(0, start);
-          node.paddingRight = Math.max(0, node.width - far);
-        } else {
-          node.paddingTop = Math.max(0, start);
-          node.paddingBottom = Math.max(0, node.height - far);
-        }
-      },
-      ["_class", "axis", "layoutAnchor"],
-      "Partial",
-      "Legacy Smart Layout translated to measured Auto Layout. Sketch resizing semantics and nonuniform gaps may differ.",
-    );
-    ctx.finding(
-      "SMART_LAYOUT_APPROXIMATION",
-      "Legacy Smart Layout uses measured Auto Layout; validate responsive behavior.",
-      s,
-      "/groupLayout",
-    );
-  }
+  if (gl?._class === "MSImmutableInferredGroupLayout")
+    await applySmartLayout(ctx, s, node);
   // Optional versioned DOM sidecars cover explicitly supplied layout semantics in other document versions.
   const stack = s.bridge?.stackLayout;
   if (stack) {

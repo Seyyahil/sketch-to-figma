@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readTestSketch, testSketchPath } from "./private-sketch";
 import { zipSync, strToU8 } from "fflate";
 import {
@@ -36,6 +36,35 @@ it.skipIf(!testSketchPath)(
   30000,
 );
 describe("archive integrity", () => {
+  it("transfers parsed worker asset buffers without copying their binary payload", async () => {
+    let received: any;
+    let sent: any;
+    const scope = {
+      onmessage: null as ((event: MessageEvent) => Promise<void>) | null,
+      postMessage(message: unknown, options?: StructuredSerializeOptions) {
+        sent = message;
+        received = structuredClone(message, options);
+      },
+    };
+    vi.stubGlobal("self", scope);
+    try {
+      await import("../src/sketch/worker");
+      const bytes = zipSync({
+        "document.json": strToU8('{"do_objectID":"D","pages":[]}'),
+        "meta.json": strToU8('{"version":196}'),
+        "images/asset.bin": new Uint8Array([1, 2, 3]),
+      });
+      await scope.onmessage!({
+        data: { id: "REQUEST", name: "transport.sketch", bytes: bytes.buffer },
+      } as MessageEvent);
+      expect(received.error).toBeUndefined();
+      expect(received.id).toBe("REQUEST");
+      expect(received.file.assets[0].bytes).toEqual(new Uint8Array([1, 2, 3]));
+      expect(sent.file.assets[0].bytes.byteLength).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("rejects non-ZIP and truncated files", async () => {
     await expect(parseSketch(new Uint8Array([1, 2, 3]), "bad")).rejects.toThrow(
       "ZIP",

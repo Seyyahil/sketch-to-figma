@@ -1,7 +1,7 @@
 import { sourceId, type Sketch } from "../core/types";
-import { imageHash, solidPaint } from "./appearance";
+import { colorVariable, imageHash, solidPaint } from "./appearance";
 import { readData, writeData } from "./storage";
-import { loadCurrentFonts } from "./typography";
+import { applyFontTraits, loadCurrentFonts } from "./typography";
 import type { ImportContext } from "./context";
 /** Sketch paths contain nested Symbol IDs and the target ID, omitting ordinary groups. */
 export function overrideTarget(
@@ -11,20 +11,44 @@ export function overrideTarget(
   let container: SceneNode = instance;
   for (const id of path) {
     if (!("children" in container)) return undefined;
-    const find=(nodes:readonly SceneNode[]):SceneNode|undefined=>{
-      for(const node of nodes){const source=node.getPluginData("sketch2figma:sourceId");if(source===id)return node;if(node.type!=="INSTANCE"&&"children" in node){const nested=find(node.children);if(nested)return nested;}}return undefined;
+    const find = (nodes: readonly SceneNode[]): SceneNode | undefined => {
+      for (const node of nodes) {
+        const source = node.getPluginData("sketch2figma:sourceId");
+        if (source === id) return node;
+        if (node.type !== "INSTANCE" && "children" in node) {
+          const nested = find(node.children);
+          if (nested) return nested;
+        }
+      }
+      return undefined;
     };
-    const found=find(container.children);
+    const found = find(container.children);
     if (!found) return undefined;
     container = found;
   }
   return container;
 }
-async function propertyOverride(root:InstanceNode,target:SceneNode,field:"characters"|"visible"|"mainComponent",value:string|boolean):Promise<boolean>{
- const key=target.componentPropertyReferences?.[field];if(!key)return false;
- let owner:BaseNode|null=target.parent;
- while(owner){if(owner.type==="INSTANCE"&&(await owner.getMainComponentAsync())?.componentPropertyDefinitions[key]){owner.setProperties({[key]:value});return true;}if(owner.id===root.id)break;owner=owner.parent;}
- return false;
+async function propertyOverride(
+  root: InstanceNode,
+  target: SceneNode,
+  field: "characters" | "visible" | "mainComponent",
+  value: string | boolean,
+): Promise<boolean> {
+  const key = target.componentPropertyReferences?.[field];
+  if (!key) return false;
+  let owner: BaseNode | null = target.parent;
+  while (owner) {
+    if (
+      owner.type === "INSTANCE" &&
+      (await owner.getMainComponentAsync())?.componentPropertyDefinitions[key]
+    ) {
+      owner.setProperties({ [key]: value });
+      return true;
+    }
+    if (owner.id === root.id) break;
+    owner = owner.parent;
+  }
+  return false;
 }
 export async function applyOverrides(
   ctx: ImportContext,
@@ -34,9 +58,17 @@ export async function applyOverrides(
   // Swap ancestor instances before applying deeper text/image overrides.
   const overrides = [...(s.overrideValues ?? [])]
     .map((o: Sketch, i: number) => ({ o, i }))
-    .sort((a,b)=>{
-      const priority=(name:string)=>name.endsWith("_symbolID")?0:/_(layerStyle|textStyle)$/.test(name)?1:2;
-      return priority(a.o.overrideName)-priority(b.o.overrideName)||a.o.overrideName.split("/").length-b.o.overrideName.split("/").length;
+    .sort((a, b) => {
+      const priority = (name: string) =>
+        name.endsWith("_symbolID")
+          ? 0
+          : /_(layerStyle|textStyle)$/.test(name)
+            ? 1
+            : 2;
+      return (
+        priority(a.o.overrideName) - priority(b.o.overrideName) ||
+        a.o.overrideName.split("/").length - b.o.overrideName.split("/").length
+      );
     });
   for (const { o, i } of overrides) {
     const match = String(o.overrideName).match(/^(.*)_([^_]+)$/),
@@ -71,28 +103,115 @@ export async function applyOverrides(
           (target.type === "TEXT" || target.type === "TEXT_PATH")
         ) {
           await loadCurrentFonts(ctx, target);
-          if(!await propertyOverride(instance,target,"characters",String(o.value)))target.characters = String(o.value);
+          if (
+            !(await propertyOverride(
+              instance,
+              target,
+              "characters",
+              String(o.value),
+            ))
+          )
+            target.characters = String(o.value);
         } else if (kind === "isVisible") {
-          const value=o.value !== false && o.value !== 0 && o.value !== "0";
-          if(!await propertyOverride(instance,target,"visible",value))target.visible=value;
+          const value = o.value !== false && o.value !== 0 && o.value !== "0";
+          if (!(await propertyOverride(instance, target, "visible", value)))
+            target.visible = value;
         } else if (kind === "symbolID" && target.type === "INSTANCE") {
           if (o.value === "") target.visible = false;
           else {
             const master = ctx.resources.components.get(String(o.value));
             if (!master) throw new Error(`Unresolved Symbol swap ${o.value}`);
-            if(!await propertyOverride(instance,target,"mainComponent",master.id))target.swapComponent(master);
+            if (
+              !(await propertyOverride(
+                instance,
+                target,
+                "mainComponent",
+                master.id,
+              ))
+            )
+              target.swapComponent(master);
           }
-        } else if(kind === "textColor" && (target.type==="TEXT"||target.type==="TEXT_PATH")){
-          target.fills=[solidPaint(ctx,s,o.value,`${path}/value`)];
-        } else if(/^color:(fill|border)-\d+$/.test(kind)){
-          const colorMatch=kind.match(/^color:(fill|border)-(\d+)$/)!;
-          const field=colorMatch[1]==="fill"?"fills":"strokes",index=Number(colorMatch[2]);
-          if(!(field in target))throw new Error(`Target does not support ${field}.`);
-          const current=(target as unknown as Sketch)[field] as readonly Paint[]|symbol;
-          if(typeof current==="symbol"||!current[index]||current[index].type!=="SOLID")throw new Error(`Color override ${kind} requires an existing solid paint.`);
-          const fills=[...current],color=solidPaint(ctx,s,o.value,`${path}/value`);
-          fills[index]={...fills[index],color:color.color,opacity:color.opacity,boundVariables:color.boundVariables} as SolidPaint;
-          (target as unknown as Sketch)[field]=fills;
+        } else if (
+          kind === "textHAlign" &&
+          (target.type === "TEXT" || target.type === "TEXT_PATH")
+        ) {
+          const align = {
+            left: "LEFT",
+            center: "CENTER",
+            right: "RIGHT",
+            justified: "JUSTIFIED",
+            justify: "JUSTIFIED",
+          } as const;
+          const value =
+            align[String(o.value).toLowerCase() as keyof typeof align];
+          if (!value) throw new Error(`Unknown text alignment ${o.value}.`);
+          target.textAlignHorizontal = value;
+        } else if (
+          kind === "textWeight" &&
+          (target.type === "TEXT" || target.type === "TEXT_PATH")
+        ) {
+          await applyFontTraits(ctx, target, o.value);
+          ctx.ledger(s).fields(`${path}/value`, Object.keys(o.value));
+        } else if (
+          /^color:(shadow|innerShadow)-\d+$/.test(kind) &&
+          "effects" in target
+        ) {
+          const match = kind.match(/^color:(shadow|innerShadow)-(\d+)$/)!;
+          const type = match[1] === "shadow" ? "DROP_SHADOW" : "INNER_SHADOW";
+          const current = [...target.effects];
+          const index = current
+            .map((effect, index) => ({ effect, index }))
+            .filter(({ effect }) => effect.type === type)[
+            Number(match[2])
+          ]?.index;
+          if (index === undefined)
+            throw new Error(`Missing effect for override ${kind}.`);
+          let effect = { ...current[index], color: ctx.color(o.value) } as
+            DropShadowEffect | InnerShadowEffect;
+          // A literal override removes the previous alias; a source-variable override binds its own alias.
+          const { color: _oldColor, ...otherBindings } =
+            effect.boundVariables ?? {};
+          effect = { ...effect, boundVariables: otherBindings };
+          const variable = colorVariable(ctx, s, o.value, `${path}/value`);
+          if (variable)
+            effect = ctx.api.variables.setBoundVariableForEffect(
+              effect,
+              "color",
+              variable,
+            ) as typeof effect;
+          current[index] = effect;
+          target.effects = current;
+          ctx.ledger(s).color(`${path}/value`);
+        } else if (
+          kind === "textColor" &&
+          (target.type === "TEXT" || target.type === "TEXT_PATH")
+        ) {
+          target.fills = [solidPaint(ctx, s, o.value, `${path}/value`)];
+        } else if (/^color:(fill|border)-\d+$/.test(kind)) {
+          const colorMatch = kind.match(/^color:(fill|border)-(\d+)$/)!;
+          const field = colorMatch[1] === "fill" ? "fills" : "strokes",
+            index = Number(colorMatch[2]);
+          if (!(field in target))
+            throw new Error(`Target does not support ${field}.`);
+          const current = (target as unknown as Sketch)[field] as
+            readonly Paint[] | symbol;
+          if (
+            typeof current === "symbol" ||
+            !current[index] ||
+            current[index].type !== "SOLID"
+          )
+            throw new Error(
+              `Color override ${kind} requires an existing solid paint.`,
+            );
+          const fills = [...current],
+            color = solidPaint(ctx, s, o.value, `${path}/value`);
+          fills[index] = {
+            ...fills[index],
+            color: color.color,
+            opacity: color.opacity,
+            boundVariables: color.boundVariables,
+          } as SolidPaint;
+          (target as unknown as Sketch)[field] = fills;
         } else if (kind === "image" && "fills" in target) {
           const hash = await imageHash(ctx, o.value);
           if (!hash) throw new Error("Missing override image");
@@ -103,11 +222,11 @@ export async function applyOverrides(
         } else if (kind === "layerStyle" && "setFillStyleIdAsync" in target) {
           const paint = ctx.resources.paints.get(String(o.value));
           const effect = ctx.resources.effects.get(String(o.value));
-          const stroke=ctx.resources.strokes.get(String(o.value));
+          const stroke = ctx.resources.strokes.get(String(o.value));
           if (!paint && !effect && !stroke)
             throw new Error("Missing layer style override");
           if (paint) target.fills = paint;
-          if(stroke && "strokes" in target) target.strokes = stroke;
+          if (stroke && "strokes" in target) target.strokes = stroke;
           if (effect && "setEffectStyleIdAsync" in target)
             await target.setEffectStyleIdAsync(effect.id);
         } else if (kind === "textStyle" && target.type === "TEXT") {
@@ -116,7 +235,8 @@ export async function applyOverrides(
           await loadCurrentFonts(ctx, target);
           await ctx.api.loadFontAsync(style.fontName);
           await target.setTextStyleIdAsync(style.id);
-          const paint=ctx.resources.paints.get(String(o.value));if(paint)target.fills = paint;
+          const paint = ctx.resources.paints.get(String(o.value));
+          if (paint) target.fills = paint;
         } else
           throw new Error(
             `Unsupported override ${kind}; original override retained.`,
@@ -125,7 +245,13 @@ export async function applyOverrides(
       ["_class", "overrideName", "value"],
     );
     if (ok && kind === "symbolID" && o.value === "")
-      ctx.ledger(s).mark(`${path}/value`, "Editable Equivalent", "Empty Sketch Symbol swap represented by native instance visibility.");
+      ctx
+        .ledger(s)
+        .mark(
+          `${path}/value`,
+          "Editable Equivalent",
+          "Empty Sketch Symbol swap represented by native instance visibility.",
+        );
     if (ok && typeof o.value === "object")
       ctx.ledger(s).fields(`${path}/value`, ["_class", "_ref_class", "_ref"]);
   }
@@ -135,7 +261,11 @@ export async function componentProperties(
   s: Sketch,
   component: ComponentNode,
 ): Promise<void> {
-  const owned=readData<Record<string,string>>(component,"componentProperties",{});
+  const owned = readData<Record<string, string>>(
+    component,
+    "componentProperties",
+    {},
+  );
   // No state-name heuristics or variants are inferred from source naming.
   for (const [i, p] of (s.overrideProperties ?? []).entries()) {
     const name = String(p.overrideName ?? ""),
@@ -153,15 +283,26 @@ export async function componentProperties(
           : m[2] === "isVisible"
             ? "BOOLEAN"
             : "INSTANCE_SWAP";
-      const initial = type === "TEXT" && "characters" in target ? target.characters
-        : type === "BOOLEAN" ? target.visible
-        : target.type === "INSTANCE" ? (await target.getMainComponentAsync())?.id : undefined;
-      if(initial===undefined)continue;
-      const existing=owned[name];
-      const id=existing && component.componentPropertyDefinitions[existing]?.type===type
-        ? component.editComponentProperty(existing,{defaultValue:initial})
-        : component.addComponentProperty(`${target.name} / ${m[2]}`,type,initial);
-      owned[name]=id;
+      const initial =
+        type === "TEXT" && "characters" in target
+          ? target.characters
+          : type === "BOOLEAN"
+            ? target.visible
+            : target.type === "INSTANCE"
+              ? (await target.getMainComponentAsync())?.id
+              : undefined;
+      if (initial === undefined) continue;
+      const existing = owned[name];
+      const id =
+        existing &&
+        component.componentPropertyDefinitions[existing]?.type === type
+          ? component.editComponentProperty(existing, { defaultValue: initial })
+          : component.addComponentProperty(
+              `${target.name} / ${m[2]}`,
+              type,
+              initial,
+            );
+      owned[name] = id;
       target.componentPropertyReferences = {
         ...target.componentPropertyReferences,
         [type === "TEXT"
@@ -187,5 +328,5 @@ export async function componentProperties(
       );
     }
   }
-  writeData(component,"componentProperties",owned);
+  writeData(component, "componentProperties", owned);
 }

@@ -1,5 +1,5 @@
 /** Bump when a conversion fix must be applied to unchanged imported source nodes. */
-export const CONVERTER_REVISION = 10;
+export const CONVERTER_REVISION = 11;
 
 /** Sketch is deliberately open: future schema fields must survive inspection. */
 export type Sketch = Record<string, any>;
@@ -171,6 +171,8 @@ export const DEFAULT_OPTIONS: ImportOptions = {
 };
 export const sourceId = (s: Sketch): string =>
   String(s.do_objectID ?? s.symbolID ?? "");
+export const isEmptySymbol = (s: Sketch): boolean =>
+  s._class === "symbolInstance" && s.symbolID === "";
 export function walkLayers(pages: Sketch[]): Sketch[] {
   const out: Sketch[] = [];
   const visit = (n: Sketch) => {

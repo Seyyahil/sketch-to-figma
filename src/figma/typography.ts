@@ -7,6 +7,89 @@ import type { Sketch } from "../core/types";
 import type { ImportContext } from "./context";
 export const normalizeFont = (name: string) =>
   name.replace(/[^a-z0-9]/gi, "").toLowerCase();
+
+/** Named regular/bold/italic CoreText traits have exact named-font equivalents. */
+export function fontTraitStyleNames(traits: Sketch): string[] {
+  const symbolic = traits?.NSCTFontSymbolicTrait;
+  const bold = typeof symbolic === "number" && (symbolic & 2) !== 0;
+  const italic = typeof symbolic === "number" && (symbolic & 1) !== 0;
+  if (
+    !Number.isInteger(symbolic) ||
+    (symbolic & ~3) !== 0 ||
+    (traits.NSCTFontProportionTrait ?? 0) !== 0 ||
+    (traits.NSCTFontSlantTrait ?? 0) !== 0 ||
+    (traits.NSCTFontWeightTrait !== undefined &&
+      (!Number.isFinite(traits.NSCTFontWeightTrait) ||
+        Math.abs(traits.NSCTFontWeightTrait - (bold ? 0.4 : 0)) > 1e-6))
+  )
+    throw new Error(
+      "Font traits have no verified named-font equivalent; source traits retained.",
+    );
+  return bold
+    ? italic
+      ? ["bolditalic", "boldoblique"]
+      : ["bold"]
+    : italic
+      ? ["italic", "oblique"]
+      : ["regular", "normal", "roman"];
+}
+
+export async function applyFontTraits(
+  ctx: ImportContext,
+  node: TextNode | TextPathNode,
+  traits: Sketch,
+): Promise<void> {
+  const styles = fontTraitStyleNames(traits);
+  const bold = (traits.NSCTFontSymbolicTrait & 2) !== 0;
+  const italic = (traits.NSCTFontSymbolicTrait & 1) !== 0;
+  await loadCurrentFonts(ctx, node);
+  const ranges = node.characters.length
+    ? node.getStyledTextSegments(["fontName"]).map((range) => ({
+        start: range.start,
+        end: range.end,
+        font: range.fontName,
+      }))
+    : [{ start: 0, end: 0, font: node.fontName }];
+  // Resolve/load every range first; an unavailable face must not partially mutate the text.
+  const resolved: { start: number; end: number; font: FontName }[] = [];
+  for (const range of ranges) {
+    if (typeof range.font === "symbol")
+      throw new Error("Cannot resolve mixed font traits on empty text.");
+    const original = range.font;
+    const match = ctx.fonts.find(
+      (font) =>
+        normalizeFont(font.fontName.family) ===
+          normalizeFont(original.family) &&
+        styles.includes(normalizeFont(font.fontName.style)),
+    )?.fontName;
+    if (!match)
+      throw new Error(
+        `Missing ${bold ? "Bold" : "Regular"}${italic ? " Italic" : ""} face in ${range.font.family}.`,
+      );
+    const otherAxes = Object.fromEntries(
+      Object.entries(range.font.variationSettings ?? {}).filter(
+        ([tag]) => !["wght", "ital", "slnt"].includes(tag),
+      ),
+    );
+    const font = Object.keys(otherAxes).length
+      ? {
+          ...match,
+          variationSettings: { ...match.variationSettings, ...otherAxes },
+        }
+      : match;
+    await ctx.api.loadFontAsync(font);
+    resolved.push({ start: range.start, end: range.end, font });
+  }
+  for (const range of resolved) {
+    const before = node.characters.length
+      ? node.getRangeFontName(range.start, range.end)
+      : node.fontName;
+    if (typeof before !== "symbol" && sameFont(before, range.font)) continue;
+    if (node.characters.length)
+      node.setRangeFontName(range.start, range.end, range.font);
+    else node.fontName = range.font;
+  }
+}
 // PostScript names documented by the installed Arial font name table.
 const postscriptAliases: Record<string, FontName> = {
   ArialMT: { family: "Arial", style: "Regular" },
@@ -23,15 +106,29 @@ export function matchFont(name: string, fonts: Font[]): FontName | undefined {
         normalizeFont(alias.family + alias.style),
     )?.fontName;
   const n = normalizeFont(name);
-  return (
+  const exact =
     fonts.find((f) => normalizeFont(f.fontName.family + f.fontName.style) === n)
       ?.fontName ??
     fonts.find(
       (f) =>
         normalizeFont(f.fontName.family) === n &&
         f.fontName.style === "Regular",
-    )?.fontName
-  );
+    )?.fontName;
+  if (exact) return exact;
+  // Sketch serializes variable-font named instances as BasePostScriptName_Face.
+  // Resolve the base first, then require the exact named face in that family.
+  const separator = name.lastIndexOf("_");
+  if (separator > 0) {
+    const base = matchFont(name.slice(0, separator), fonts);
+    if (base)
+      return fonts.find(
+        (font) =>
+          normalizeFont(font.fontName.family) === normalizeFont(base.family) &&
+          normalizeFont(font.fontName.style) ===
+            normalizeFont(name.slice(separator + 1)),
+      )?.fontName;
+  }
+  return undefined;
 }
 export async function resolveFont(
   ctx: ImportContext,

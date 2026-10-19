@@ -92,6 +92,199 @@ function host(moveY = 0, shorten = 0) {
   return h;
 }
 describe("geometry report integration", () => {
+  it("retains disabled source paint aliases when adding opaque outline-mask coverage", async () => {
+    const h = createHost(),
+      source = file();
+    const color = { red: 0.1, green: 0.2, blue: 0.3, alpha: 1 };
+    source.document.sharedSwatches = {
+      objects: [
+        {
+          _class: "swatch",
+          do_objectID: "COLOR",
+          name: "Source color",
+          value: color,
+        },
+      ],
+    };
+    source.pages[0].layers = [
+      {
+        _class: "group",
+        do_objectID: "CONTAINER",
+        name: "Container",
+        frame: { x: 0, y: 0, width: 100, height: 100 },
+        layers: [
+          {
+            _class: "rectangle",
+            do_objectID: "MASK",
+            name: "Outline",
+            hasClippingMask: true,
+            clippingMaskMode: 0,
+            frame: { x: 0, y: 0, width: 100, height: 100 },
+            style: {
+              fills: [
+                {
+                  fillType: 0,
+                  isEnabled: false,
+                  color: { ...color, swatchID: "COLOR" },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ];
+    const report = await startImport(h.api, source, DEFAULT_OPTIONS).result;
+    const mask = h.nodes.get(
+      readIndex(h.api, source.documentId).nodes.MASK.nodeId,
+    );
+    expect(mask.fills).toHaveLength(2);
+    expect(mask.fills[0].visible).toBe(false);
+    expect(mask.fills[0].boundVariables.color.id).toBeDefined();
+    expect(mask.fills[1].type).toBe("SOLID");
+    expect(
+      report.validations.find(
+        (v) => v.kind === "variable-binding" && v.sourceId === "MASK",
+      )?.passed,
+    ).toBe(true);
+  });
+  it("reads outline-mask bindings from the retained painted layer", async () => {
+    const h = createHost(),
+      source = file();
+    const color = { red: 0.1, green: 0.2, blue: 0.3, alpha: 1 };
+    source.document.sharedSwatches = {
+      objects: [
+        {
+          _class: "swatch",
+          do_objectID: "COLOR",
+          name: "Source color",
+          value: color,
+        },
+      ],
+    };
+    source.pages[0].layers = [
+      {
+        _class: "rectangle",
+        do_objectID: "MASK",
+        name: "Outline",
+        hasClippingMask: true,
+        clippingMaskMode: 0,
+        frame: { x: 0, y: 0, width: 100, height: 100 },
+        style: {
+          fills: [
+            {
+              fillType: 0,
+              isEnabled: true,
+              color: { ...color, swatchID: "COLOR" },
+            },
+          ],
+          shadows: [
+            {
+              isEnabled: false,
+              blurRadius: 4,
+              color: { ...color, swatchID: "COLOR" },
+            },
+          ],
+        },
+      },
+    ];
+    source.pages[0].layers = [
+      {
+        _class: "group",
+        do_objectID: "CONTAINER",
+        name: "Container",
+        frame: { x: 0, y: 0, width: 100, height: 100 },
+        layers: source.pages[0].layers,
+      },
+    ];
+    const report = await startImport(h.api, source, DEFAULT_OPTIONS).result;
+    const mask = h.nodes.get(
+      readIndex(h.api, source.documentId).nodes.MASK.nodeId,
+    );
+    expect(mask.effects).toEqual([]);
+    const painted = mask.parent.children.find(
+      (child: SceneNode) =>
+        child.getPluginData("sketch2figma:paintFor") === "MASK",
+    );
+    expect(painted.effects[0].boundVariables.color.id).toBeDefined();
+    const bindings = report.validations.filter(
+      (v) => v.kind === "variable-binding" && v.sourceId === "MASK",
+    );
+    expect(bindings).toHaveLength(2);
+    expect(bindings.every((v) => v.passed)).toBe(true);
+    // A broken binding on the rendered appearance must still fail readback.
+    painted.effects = [{ ...painted.effects[0], boundVariables: {} }];
+    const ctx = new ImportContext(
+      h.api,
+      source,
+      DEFAULT_OPTIONS,
+      { ...report, validations: [], findings: [] },
+      readIndex(h.api, source.documentId),
+      { track() {}, trackResource() {}, async before() {} },
+      () => {},
+    );
+    ctx.nodes.set("MASK", mask);
+    ctx.resources.variables.set(
+      "COLOR",
+      h.variables.get(
+        readIndex(h.api, source.documentId).resources["color:COLOR"],
+      ),
+    );
+    await validateImport(ctx, new Set(["MASK"]));
+    expect(
+      ctx.report.validations.some(
+        (v) => v.kind === "variable-binding" && v.passed === false,
+      ),
+    ).toBe(true);
+  });
+  it("validates combined-shape borders on their operative paint node", async () => {
+    const h = createHost(),
+      source = file();
+    const line = source.pages[0].layers[0];
+    source.pages[0].layers = [
+      {
+        _class: "shapeGroup",
+        do_objectID: "COMBINED",
+        name: "Combined",
+        frame: { x: 0, y: 0, width: 345, height: 2 },
+        windingRule: 1,
+        style: {
+          borders: [
+            {
+              isEnabled: true,
+              fillType: 0,
+              position: 0,
+              thickness: 3,
+              color: { red: 0, green: 0, blue: 0, alpha: 1 },
+            },
+          ],
+        },
+        layers: [
+          {
+            ...line,
+            frame: { ...line.frame, x: 0, y: 0 },
+            booleanOperation: -1,
+          },
+        ],
+      },
+    ];
+    const report = await startImport(h.api, source, DEFAULT_OPTIONS).result;
+    const parent = h.nodes.get(
+      readIndex(h.api, source.documentId).nodes.COMBINED.nodeId,
+    );
+    const paint = parent.children.find(
+      (child: any) => child.getPluginData("sketch2figma:wrapper") === "boolean",
+    );
+    expect(paint.strokeWeight).toBe(3);
+    expect(parent.strokeWeight).toBe(1);
+    const readback = report.validations.find(
+      (v) => v.kind === "border-geometry" && v.sourceId === "COMBINED",
+    );
+    expect(readback?.passed).toBe(true);
+    expect(readback?.actual).toEqual({
+      strokeWeight: 3,
+      strokeAlign: "CENTER",
+    });
+  });
   it("records a rebased line as equivalent without downgrading frame properties or reporting a lost border", async () => {
     const h = host(),
       source = file(),

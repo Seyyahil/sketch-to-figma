@@ -3,6 +3,8 @@ import { instanceTextSources } from "./instance-text-styles";
 import { validateDetails } from "./detail-validation";
 import { validateBooleanShape } from "./booleans";
 import { overrideTarget } from "./symbols";
+import { appearanceNode } from "./appearance";
+import { fontTraitStyleNames, normalizeFont } from "./typography";
 import {
   auditGeometry,
   GEOMETRY_TOLERANCE,
@@ -121,7 +123,16 @@ export async function validateImport(
         actual: "characters" in n ? n.characters : null,
         message: `${s.name}: editable UTF-16 text ${"characters" in n && n.characters === s.attributedString?.string ? "is preserved" : "differs or is missing"}.`,
       });
-    if (s._class === "symbolInstance") {
+    if (s._class === "symbolInstance" && s.symbolID === "") {
+      checks.push({
+        kind: "component-link",
+        sourceId: id,
+        passed: n.type === "FRAME" && n.children.length === 0,
+        expected: null,
+        actual: n.type === "FRAME" && n.children.length === 0 ? null : n.type,
+        message: `${s.name}: explicitly empty Sketch Symbol remains empty without inventing a component.`,
+      });
+    } else if (s._class === "symbolInstance") {
       const master =
         n.type === "INSTANCE" ? await n.getMainComponentAsync() : null;
       const expectedComponent = ctx.resources.components.get(
@@ -138,14 +149,7 @@ export async function validateImport(
         message: `${s.name}: ${linked ? "linked to the resolved component" : "component link differs or is missing"}.`,
       });
     }
-    const appearance =
-      s._class === "shapeGroup" && "children" in n
-        ? (n.children.find(
-            (child) =>
-              child.getPluginData("sketch2figma:wrapper") === "boolean" &&
-              !child.getPluginData("sketch2figma:obsolete"),
-          ) ?? n)
-        : n;
+    const appearance = appearanceNode(s, n);
     if (s.sharedStyleID) {
       const id = s.sharedStyleID;
       for (const [resource, field] of [
@@ -381,6 +385,72 @@ async function validateOverrides(
     if (!m) continue;
     const target = overrideTarget(n, m[1].split("/"));
     let passed: boolean | undefined;
+    let observed: unknown;
+    let hasObserved = false;
+    if (m[2] === "textHAlign") {
+      const expected = (
+        {
+          left: "LEFT",
+          center: "CENTER",
+          right: "RIGHT",
+          justify: "JUSTIFIED",
+          justified: "JUSTIFIED",
+        } as Record<string, string>
+      )[String(o.value).toLowerCase()];
+      observed =
+        target && "textAlignHorizontal" in target
+          ? target.textAlignHorizontal
+          : null;
+      hasObserved = true;
+      passed = !!expected && observed === expected;
+    }
+    if (m[2] === "textWeight") {
+      hasObserved = true;
+      observed = null;
+      passed = false;
+      if (target?.type === "TEXT" || target?.type === "TEXT_PATH") {
+        const fonts = target.characters.length
+          ? target.getRangeAllFontNames(0, target.characters.length)
+          : typeof target.fontName === "symbol"
+            ? []
+            : [target.fontName];
+        observed = fonts;
+        try {
+          const styles = fontTraitStyleNames(o.value);
+          passed =
+            fonts.length > 0 &&
+            fonts.every((font) => styles.includes(normalizeFont(font.style)));
+        } catch {
+          /* Unsupported source traits remain an explicit failed check. */
+        }
+      }
+    }
+    const shadow = m[2].match(/^color:(shadow|innerShadow)-(\d+)$/);
+    if (shadow) {
+      const type = shadow[1] === "shadow" ? "DROP_SHADOW" : "INNER_SHADOW";
+      const effect =
+        target && "effects" in target
+          ? (target.effects.filter((effect) => effect.type === type)[
+              Number(shadow[2])
+            ] as DropShadowEffect | InnerShadowEffect | undefined)
+          : undefined;
+      const expected = ctx.color(o.value);
+      observed = effect?.color ?? null;
+      hasObserved = true;
+      passed =
+        !!effect &&
+        (["r", "g", "b", "a"] as const).every(
+          (channel) =>
+            Math.abs(effect.color[channel] - expected[channel]) <= 1e-6,
+        );
+      if (o.value?.swatchID) {
+        const variable = ctx.resources.variables.get(o.value.swatchID);
+        passed =
+          passed &&
+          !!variable &&
+          effect?.boundVariables?.color?.id === variable.id;
+      } else passed = passed && !effect?.boundVariables?.color;
+    }
     if (m[2] === "stringValue")
       passed =
         !!target &&
@@ -404,17 +474,19 @@ async function validateOverrides(
         sourceId: sourceId(s),
         passed,
         expected: o.value,
-        actual: !target
-          ? null
-          : m[2] === "stringValue" && "characters" in target
-            ? target.characters
-            : m[2] === "isVisible"
-              ? target.visible
-              : target.type === "INSTANCE"
-                ? (await target.getMainComponentAsync())?.getPluginData(
-                    "sketch2figma:sourceId",
-                  )
-                : null,
+        actual: hasObserved
+          ? observed
+          : !target
+            ? null
+            : m[2] === "stringValue" && "characters" in target
+              ? target.characters
+              : m[2] === "isVisible"
+                ? target.visible
+                : target.type === "INSTANCE"
+                  ? (await target.getMainComponentAsync())?.getPluginData(
+                      "sketch2figma:sourceId",
+                    )
+                  : null,
         message: `${s.name}: ${o.overrideName} ${passed ? "matches" : "differs from"} the source override.`,
       });
   }

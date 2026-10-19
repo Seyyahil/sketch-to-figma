@@ -1518,7 +1518,7 @@
   }
 
   // src/core/types.ts
-  var CONVERTER_REVISION = 10;
+  var CONVERTER_REVISION = 11;
   var DEFAULT_OPTIONS = {
     selectedIds: [],
     resources: true,
@@ -1530,6 +1530,7 @@
     generatePrototypePage: false
   };
   var sourceId = (s) => String(s.do_objectID ?? s.symbolID ?? "");
+  var isEmptySymbol = (s) => s._class === "symbolInstance" && s.symbolID === "";
   function walkLayers(pages) {
     const out = [];
     const visit = (n) => {
@@ -1677,6 +1678,17 @@
   }
 
   // src/figma/appearance.ts
+  function appearanceNode(source, node) {
+    if (source.hasClippingMask && source.clippingMaskMode === 0 && node.parent) {
+      const painted = node.parent.children.find(
+        (child) => child.getPluginData("sketch2figma:wrapper") === "outline-paint" && child.getPluginData("sketch2figma:paintFor") === sourceId(source)
+      );
+      if (painted) node = painted;
+    }
+    return source._class === "shapeGroup" && "children" in node ? node.children.find(
+      (child) => child.getPluginData("sketch2figma:wrapper") === "boolean" && !child.getPluginData("sketch2figma:obsolete")
+    ) ?? node : node;
+  }
   var BLENDS = [
     "NORMAL",
     "DARKEN",
@@ -2383,21 +2395,25 @@
   function requiredSymbols(pages, scope, available) {
     const result = /* @__PURE__ */ new Set();
     function add(id) {
-      if (result.has(id)) return;
+      if (!id || result.has(id)) return;
       result.add(id);
       const s = available.get(id);
       if (s) {
         for (const n of walkLayers(s.layers ?? []))
           if (n._class === "symbolInstance") {
             add(String(n.symbolID));
-            for (const o of n.overrideValues ?? []) if (String(o.overrideName).endsWith("_symbolID") && o.value) add(String(o.value));
+            for (const o of n.overrideValues ?? [])
+              if (String(o.overrideName).endsWith("_symbolID") && o.value)
+                add(String(o.value));
           }
       }
     }
     for (const n of walkLayers(pages))
       if (scope.has(sourceId(n)) && n._class === "symbolInstance") {
         add(String(n.symbolID));
-        for (const o of n.overrideValues ?? []) if (String(o.overrideName).endsWith("_symbolID") && o.value) add(String(o.value));
+        for (const o of n.overrideValues ?? [])
+          if (String(o.overrideName).endsWith("_symbolID") && o.value)
+            add(String(o.value));
       }
     return result;
   }
@@ -3094,6 +3110,58 @@
 
   // src/figma/typography.ts
   var normalizeFont = (name) => name.replace(/[^a-z0-9]/gi, "").toLowerCase();
+  function fontTraitStyleNames(traits) {
+    const symbolic = traits?.NSCTFontSymbolicTrait;
+    const bold = typeof symbolic === "number" && (symbolic & 2) !== 0;
+    const italic = typeof symbolic === "number" && (symbolic & 1) !== 0;
+    if (!Number.isInteger(symbolic) || (symbolic & ~3) !== 0 || (traits.NSCTFontProportionTrait ?? 0) !== 0 || (traits.NSCTFontSlantTrait ?? 0) !== 0 || traits.NSCTFontWeightTrait !== void 0 && (!Number.isFinite(traits.NSCTFontWeightTrait) || Math.abs(traits.NSCTFontWeightTrait - (bold ? 0.4 : 0)) > 1e-6))
+      throw new Error(
+        "Font traits have no verified named-font equivalent; source traits retained."
+      );
+    return bold ? italic ? ["bolditalic", "boldoblique"] : ["bold"] : italic ? ["italic", "oblique"] : ["regular", "normal", "roman"];
+  }
+  async function applyFontTraits(ctx, node, traits) {
+    const styles = fontTraitStyleNames(traits);
+    const bold = (traits.NSCTFontSymbolicTrait & 2) !== 0;
+    const italic = (traits.NSCTFontSymbolicTrait & 1) !== 0;
+    await loadCurrentFonts(ctx, node);
+    const ranges = node.characters.length ? node.getStyledTextSegments(["fontName"]).map((range) => ({
+      start: range.start,
+      end: range.end,
+      font: range.fontName
+    })) : [{ start: 0, end: 0, font: node.fontName }];
+    const resolved = [];
+    for (const range of ranges) {
+      if (typeof range.font === "symbol")
+        throw new Error("Cannot resolve mixed font traits on empty text.");
+      const original = range.font;
+      const match = ctx.fonts.find(
+        (font2) => normalizeFont(font2.fontName.family) === normalizeFont(original.family) && styles.includes(normalizeFont(font2.fontName.style))
+      )?.fontName;
+      if (!match)
+        throw new Error(
+          `Missing ${bold ? "Bold" : "Regular"}${italic ? " Italic" : ""} face in ${range.font.family}.`
+        );
+      const otherAxes = Object.fromEntries(
+        Object.entries(range.font.variationSettings ?? {}).filter(
+          ([tag]) => !["wght", "ital", "slnt"].includes(tag)
+        )
+      );
+      const font = Object.keys(otherAxes).length ? {
+        ...match,
+        variationSettings: { ...match.variationSettings, ...otherAxes }
+      } : match;
+      await ctx.api.loadFontAsync(font);
+      resolved.push({ start: range.start, end: range.end, font });
+    }
+    for (const range of resolved) {
+      const before = node.characters.length ? node.getRangeFontName(range.start, range.end) : node.fontName;
+      if (typeof before !== "symbol" && sameFont(before, range.font)) continue;
+      if (node.characters.length)
+        node.setRangeFontName(range.start, range.end, range.font);
+      else node.fontName = range.font;
+    }
+  }
   var postscriptAliases = {
     ArialMT: { family: "Arial", style: "Regular" },
     "Arial-BoldMT": { family: "Arial", style: "Bold" },
@@ -3107,9 +3175,19 @@
         (f) => normalizeFont(f.fontName.family + f.fontName.style) === normalizeFont(alias.family + alias.style)
       )?.fontName;
     const n = normalizeFont(name);
-    return fonts.find((f) => normalizeFont(f.fontName.family + f.fontName.style) === n)?.fontName ?? fonts.find(
+    const exact = fonts.find((f) => normalizeFont(f.fontName.family + f.fontName.style) === n)?.fontName ?? fonts.find(
       (f) => normalizeFont(f.fontName.family) === n && f.fontName.style === "Regular"
     )?.fontName;
+    if (exact) return exact;
+    const separator = name.lastIndexOf("_");
+    if (separator > 0) {
+      const base = matchFont(name.slice(0, separator), fonts);
+      if (base)
+        return fonts.find(
+          (font) => normalizeFont(font.fontName.family) === normalizeFont(base.family) && normalizeFont(font.fontName.style) === normalizeFont(name.slice(separator + 1))
+        )?.fontName;
+    }
+    return void 0;
   }
   async function resolveFont(ctx, descriptor, s, path) {
     const name = descriptor?.attributes?.name ?? "Inter-Regular", replacement = ctx.options.fontMap[name];
@@ -3389,6 +3467,179 @@
     for (const font of currentFontNames(node)) await ctx.api.loadFontAsync(font);
     if (node.characters.length && typeof node.fontName !== "symbol")
       await ctx.api.loadFontAsync(node.fontName);
+  }
+
+  // src/figma/smart-layout.ts
+  var close = (a, b) => Math.abs(a - b) <= 1e-6;
+  function smartLayoutPlan(source) {
+    const gl = source.groupLayout;
+    if (![0, 1].includes(gl?.axis) || ![0, 1, 2].includes(gl?.layoutAnchor))
+      return { reason: "Unrecognized legacy Smart Layout direction or anchor." };
+    const horizontal = gl.axis === 0;
+    const axis = horizontal ? "x" : "y";
+    const size = horizontal ? "width" : "height";
+    const cross = horizontal ? "y" : "x";
+    const crossSize = horizontal ? "height" : "width";
+    const parent = source.frame;
+    const children = (source.layers ?? []).filter(
+      (child) => child.isVisible !== false
+    );
+    if (!parent || !children.length)
+      return { reason: "No visible linear content to translate to Auto Layout." };
+    for (const child of children) {
+      const f = child.frame;
+      if (!f || ![f.x, f.y, f.width, f.height].every(Number.isFinite) || f.width <= 0 || f.height <= 0 || child.rotation || child.isFlippedHorizontal || child.isFlippedVertical || child.flexItem?.ignoreLayout || child.bridge?.ignoresStackLayout)
+        return {
+          reason: "Transformed, excluded or degenerate children need their source positions."
+        };
+      if (f.x < -1e-6 || f.y < -1e-6 || f.x + f.width > parent.width + 1e-6 || f.y + f.height > parent.height + 1e-6)
+        return { reason: "Children extend outside the source container." };
+    }
+    const order = [...children].sort((a, b) => a.frame[axis] - b.frame[axis]);
+    const gaps = order.slice(1).map(
+      (child, i2) => child.frame[axis] - order[i2].frame[axis] - order[i2].frame[size]
+    );
+    if (gaps.some((gap2) => gap2 < -1e-6))
+      return {
+        reason: "Overlapping children cannot be represented as linear Auto Layout flow."
+      };
+    const gap = gaps[0] ?? 0;
+    if (gaps.some((value) => !close(value, gap)))
+      return {
+        reason: "Unequal source gaps cannot be represented by one Auto Layout spacing value."
+      };
+    const starts = order.map((child) => child.frame[cross]);
+    const ends = order.map(
+      (child) => child.frame[cross] + child.frame[crossSize]
+    );
+    const centers = order.map((child, i2) => (starts[i2] + ends[i2]) / 2);
+    const crossAlignment = starts.every(
+      (value) => close(value, starts[0])
+    ) ? "MIN" : centers.every((value) => close(value, centers[0])) ? "CENTER" : ends.every((value) => close(value, ends[0])) ? "MAX" : void 0;
+    if (!crossAlignment)
+      return {
+        reason: "Independent cross-axis positions cannot share one Auto Layout alignment."
+      };
+    const ids = children.map(sourceId);
+    const sortedIds = order.map(sourceId);
+    const sameOrder = ids.every((id, i2) => id === sortedIds[i2]);
+    const reverseOrder = ids.every(
+      (id, i2) => id === sortedIds[ids.length - 1 - i2]
+    );
+    if (!sameOrder && !reverseOrder)
+      return {
+        reason: "Source paint order cannot be preserved by this linear flow."
+      };
+    const first = order[0].frame;
+    const last = order[order.length - 1].frame;
+    const near = starts.reduce((a, b) => Math.min(a, b), Infinity);
+    const far = ends.reduce((a, b) => Math.max(a, b), -Infinity);
+    const padding = {
+      top: horizontal ? near : first.y,
+      right: horizontal ? parent.width - last.x - last.width : parent.width - far,
+      bottom: horizontal ? parent.height - far : parent.height - last.y - last.height,
+      left: horizontal ? first.x : near
+    };
+    for (const key of ["top", "right", "bottom", "left"])
+      if (close(padding[key], 0)) padding[key] = 0;
+    return {
+      direction: horizontal ? "HORIZONTAL" : "VERTICAL",
+      order,
+      gap: close(gap, 0) ? 0 : gap,
+      crossAlignment,
+      reverseZ: !sameOrder,
+      padding
+    };
+  }
+  async function applySmartLayout(ctx, source, node) {
+    let plan = smartLayoutPlan(source);
+    if (!("reason" in plan)) {
+      const children = plan.order;
+      const targets = children.map((child) => ctx.nodes.get(sourceId(child)));
+      const sourceIds = new Set((source.layers ?? []).map(sourceId));
+      if (targets.some(
+        (child, i2) => !child || child.parent?.id !== node.id || child.type === "VECTOR" || // Permit native float storage noise, not intrinsic text-size changes.
+        Math.abs(child.width - children[i2].frame.width) > 1e-4 || Math.abs(child.height - children[i2].frame.height) > 1e-4
+      ) || node.children.some(
+        (child) => !sourceIds.has(child.getPluginData("sketch2figma:sourceId"))
+      ))
+        plan = {
+          reason: "Source child geometry or native wrappers require freeform positioning."
+        };
+    }
+    if ("reason" in plan) {
+      const reason2 = `${plan.reason} Editable source geometry, paint order and constraints retained; legacy responsive behavior is not reproduced.`;
+      await ctx.attempt(
+        source,
+        "/groupLayout",
+        () => {
+          node.layoutMode = "NONE";
+        },
+        ["_class", "axis", "layoutAnchor"],
+        "Partial",
+        reason2
+      );
+      ctx.finding("SMART_LAYOUT_GEOMETRY", reason2, source, "/groupLayout");
+      return;
+    }
+    const native = plan;
+    const originalTransforms = node.children.map((child) => ({
+      child,
+      transform: child.relativeTransform
+    }));
+    const hidden = originalTransforms.filter(({ child }) => !child.visible);
+    const reason = "Legacy Smart Layout represented by measured linear Auto Layout; source spacing, positions and paint order preserved. Dynamic Sketch resize behavior may differ.";
+    const accepted = await ctx.attempt(
+      source,
+      "/groupLayout",
+      () => {
+        node.layoutMode = native.direction;
+        node.primaryAxisSizingMode = "FIXED";
+        node.counterAxisSizingMode = "FIXED";
+        node.layoutWrap = "NO_WRAP";
+        node.itemSpacing = native.gap;
+        node.primaryAxisAlignItems = ["MIN", "CENTER", "MAX"][source.groupLayout.layoutAnchor];
+        node.counterAxisAlignItems = native.crossAlignment;
+        node.itemReverseZIndex = native.reverseZ;
+        node.paddingTop = native.padding.top;
+        node.paddingRight = native.padding.right;
+        node.paddingBottom = native.padding.bottom;
+        node.paddingLeft = native.padding.left;
+        native.order.forEach(
+          (child, i2) => node.insertChild(i2, ctx.nodes.get(sourceId(child)))
+        );
+        for (const { child, transform: transform2 } of hidden) {
+          if ("layoutPositioning" in child) child.layoutPositioning = "ABSOLUTE";
+          child.relativeTransform = transform2;
+        }
+        node.resize(source.frame.width, source.frame.height);
+      },
+      ["_class", "axis", "layoutAnchor"],
+      "Partial",
+      reason
+    );
+    if (accepted)
+      ctx.finding("SMART_LAYOUT_APPROXIMATION", reason, source, "/groupLayout");
+    else {
+      const fallback = "Figma rejected the measured Smart Layout mapping. Editable source positions retained in a freeform frame.";
+      await ctx.attempt(
+        source,
+        "/groupLayout",
+        () => {
+          node.layoutMode = "NONE";
+          node.resize(source.frame.width, source.frame.height);
+          originalTransforms.forEach(
+            ({ child }, i2) => node.insertChild(i2, child)
+          );
+          for (const { child, transform: transform2 } of originalTransforms)
+            child.relativeTransform = transform2;
+        },
+        ["_class", "axis", "layoutAnchor"],
+        "Partial",
+        fallback
+      );
+      ctx.finding("SMART_LAYOUT_GEOMETRY", fallback, source, "/groupLayout");
+    }
   }
 
   // src/figma/serialized-layout.ts
@@ -3683,47 +3934,8 @@
     if (!("layoutMode" in node) || node.type === "INSTANCE") return;
     if (await applySerializedStack(ctx, s, node)) return;
     const gl = s.groupLayout, l = ctx.ledger(s);
-    if (gl?._class === "MSImmutableInferredGroupLayout") {
-      const horizontal = gl.axis === 0, children = (s.layers ?? []).filter((n) => n.isVisible !== false), axis = horizontal ? "x" : "y", size = horizontal ? "width" : "height";
-      const sorted = [...children].sort((a, b) => a.frame[axis] - b.frame[axis]);
-      const gaps = sorted.slice(1).map(
-        (n, i2) => n.frame[axis] - sorted[i2].frame[axis] - sorted[i2].frame[size]
-      );
-      const gap = gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0;
-      const start = sorted[0]?.frame[axis] ?? 0;
-      const far = Math.max(
-        0,
-        ...children.map((c) => c.frame[axis] + c.frame[size])
-      );
-      await ctx.attempt(
-        s,
-        "/groupLayout",
-        () => {
-          node.layoutMode = horizontal ? "HORIZONTAL" : "VERTICAL";
-          node.primaryAxisSizingMode = "FIXED";
-          node.counterAxisSizingMode = "FIXED";
-          node.itemSpacing = gap;
-          node.primaryAxisAlignItems = ["MIN", "CENTER", "MAX"][gl.layoutAnchor ?? 0] ?? "MIN";
-          node.counterAxisAlignItems = "MIN";
-          if (horizontal) {
-            node.paddingLeft = Math.max(0, start);
-            node.paddingRight = Math.max(0, node.width - far);
-          } else {
-            node.paddingTop = Math.max(0, start);
-            node.paddingBottom = Math.max(0, node.height - far);
-          }
-        },
-        ["_class", "axis", "layoutAnchor"],
-        "Partial",
-        "Legacy Smart Layout translated to measured Auto Layout. Sketch resizing semantics and nonuniform gaps may differ."
-      );
-      ctx.finding(
-        "SMART_LAYOUT_APPROXIMATION",
-        "Legacy Smart Layout uses measured Auto Layout; validate responsive behavior.",
-        s,
-        "/groupLayout"
-      );
-    }
+    if (gl?._class === "MSImmutableInferredGroupLayout")
+      await applySmartLayout(ctx, s, node);
     const stack = s.bridge?.stackLayout;
     if (stack) {
       const path = "/bridge/stackLayout";
@@ -4652,27 +4864,83 @@
         async () => {
           if (kind === "stringValue" && (target.type === "TEXT" || target.type === "TEXT_PATH")) {
             await loadCurrentFonts(ctx, target);
-            if (!await propertyOverride(instance, target, "characters", String(o.value))) target.characters = String(o.value);
+            if (!await propertyOverride(
+              instance,
+              target,
+              "characters",
+              String(o.value)
+            ))
+              target.characters = String(o.value);
           } else if (kind === "isVisible") {
             const value = o.value !== false && o.value !== 0 && o.value !== "0";
-            if (!await propertyOverride(instance, target, "visible", value)) target.visible = value;
+            if (!await propertyOverride(instance, target, "visible", value))
+              target.visible = value;
           } else if (kind === "symbolID" && target.type === "INSTANCE") {
             if (o.value === "") target.visible = false;
             else {
               const master = ctx.resources.components.get(String(o.value));
               if (!master) throw new Error(`Unresolved Symbol swap ${o.value}`);
-              if (!await propertyOverride(instance, target, "mainComponent", master.id)) target.swapComponent(master);
+              if (!await propertyOverride(
+                instance,
+                target,
+                "mainComponent",
+                master.id
+              ))
+                target.swapComponent(master);
             }
+          } else if (kind === "textHAlign" && (target.type === "TEXT" || target.type === "TEXT_PATH")) {
+            const align = {
+              left: "LEFT",
+              center: "CENTER",
+              right: "RIGHT",
+              justified: "JUSTIFIED",
+              justify: "JUSTIFIED"
+            };
+            const value = align[String(o.value).toLowerCase()];
+            if (!value) throw new Error(`Unknown text alignment ${o.value}.`);
+            target.textAlignHorizontal = value;
+          } else if (kind === "textWeight" && (target.type === "TEXT" || target.type === "TEXT_PATH")) {
+            await applyFontTraits(ctx, target, o.value);
+            ctx.ledger(s).fields(`${path}/value`, Object.keys(o.value));
+          } else if (/^color:(shadow|innerShadow)-\d+$/.test(kind) && "effects" in target) {
+            const match2 = kind.match(/^color:(shadow|innerShadow)-(\d+)$/);
+            const type = match2[1] === "shadow" ? "DROP_SHADOW" : "INNER_SHADOW";
+            const current = [...target.effects];
+            const index = current.map((effect2, index2) => ({ effect: effect2, index: index2 })).filter(({ effect: effect2 }) => effect2.type === type)[Number(match2[2])]?.index;
+            if (index === void 0)
+              throw new Error(`Missing effect for override ${kind}.`);
+            let effect = { ...current[index], color: ctx.color(o.value) };
+            const { color: _oldColor, ...otherBindings } = effect.boundVariables ?? {};
+            effect = { ...effect, boundVariables: otherBindings };
+            const variable = colorVariable(ctx, s, o.value, `${path}/value`);
+            if (variable)
+              effect = ctx.api.variables.setBoundVariableForEffect(
+                effect,
+                "color",
+                variable
+              );
+            current[index] = effect;
+            target.effects = current;
+            ctx.ledger(s).color(`${path}/value`);
           } else if (kind === "textColor" && (target.type === "TEXT" || target.type === "TEXT_PATH")) {
             target.fills = [solidPaint(ctx, s, o.value, `${path}/value`)];
           } else if (/^color:(fill|border)-\d+$/.test(kind)) {
             const colorMatch = kind.match(/^color:(fill|border)-(\d+)$/);
             const field = colorMatch[1] === "fill" ? "fills" : "strokes", index = Number(colorMatch[2]);
-            if (!(field in target)) throw new Error(`Target does not support ${field}.`);
+            if (!(field in target))
+              throw new Error(`Target does not support ${field}.`);
             const current = target[field];
-            if (typeof current === "symbol" || !current[index] || current[index].type !== "SOLID") throw new Error(`Color override ${kind} requires an existing solid paint.`);
+            if (typeof current === "symbol" || !current[index] || current[index].type !== "SOLID")
+              throw new Error(
+                `Color override ${kind} requires an existing solid paint.`
+              );
             const fills = [...current], color = solidPaint(ctx, s, o.value, `${path}/value`);
-            fills[index] = { ...fills[index], color: color.color, opacity: color.opacity, boundVariables: color.boundVariables };
+            fills[index] = {
+              ...fills[index],
+              color: color.color,
+              opacity: color.opacity,
+              boundVariables: color.boundVariables
+            };
             target[field] = fills;
           } else if (kind === "image" && "fills" in target) {
             const hash = await imageHash(ctx, o.value);
@@ -4707,13 +4975,21 @@
         ["_class", "overrideName", "value"]
       );
       if (ok && kind === "symbolID" && o.value === "")
-        ctx.ledger(s).mark(`${path}/value`, "Editable Equivalent", "Empty Sketch Symbol swap represented by native instance visibility.");
+        ctx.ledger(s).mark(
+          `${path}/value`,
+          "Editable Equivalent",
+          "Empty Sketch Symbol swap represented by native instance visibility."
+        );
       if (ok && typeof o.value === "object")
         ctx.ledger(s).fields(`${path}/value`, ["_class", "_ref_class", "_ref"]);
     }
   }
   async function componentProperties(ctx, s, component) {
-    const owned2 = readData(component, "componentProperties", {});
+    const owned2 = readData(
+      component,
+      "componentProperties",
+      {}
+    );
     for (const [i2, p] of (s.overrideProperties ?? []).entries()) {
       const name = String(p.overrideName ?? ""), m = name.match(/^(.*)_(stringValue|isVisible|symbolID)$/);
       if (!m || p.canOverride === false) continue;
@@ -4727,7 +5003,11 @@
         const initial = type === "TEXT" && "characters" in target ? target.characters : type === "BOOLEAN" ? target.visible : target.type === "INSTANCE" ? (await target.getMainComponentAsync())?.id : void 0;
         if (initial === void 0) continue;
         const existing = owned2[name];
-        const id = existing && component.componentPropertyDefinitions[existing]?.type === type ? component.editComponentProperty(existing, { defaultValue: initial }) : component.addComponentProperty(`${target.name} / ${m[2]}`, type, initial);
+        const id = existing && component.componentPropertyDefinitions[existing]?.type === type ? component.editComponentProperty(existing, { defaultValue: initial }) : component.addComponentProperty(
+          `${target.name} / ${m[2]}`,
+          type,
+          initial
+        );
         owned2[name] = id;
         target.componentPropertyReferences = {
           ...target.componentPropertyReferences,
@@ -5113,12 +5393,12 @@
     const supplied = new Set(
       (ctx.options.tokens?.bindings ?? []).filter((b) => b.sourceId === sourceId(source)).map((b) => b.field)
     );
-    const check = (kind, values, path) => {
+    const check = (kind, values, path, readback = target) => {
       const expected = {}, actual = {};
       for (const [field, value] of Object.entries(values)) {
         if (supplied.has(field)) continue;
         expected[field] = value;
-        actual[field] = target[field];
+        actual[field] = readback[field];
       }
       if (!Object.keys(expected).length) return;
       const changed = Object.keys(expected).filter(
@@ -5215,7 +5495,8 @@
           strokeWeight: Math.max(0, finite(border.thickness, 1)),
           strokeAlign: ["CENTER", "INSIDE", "OUTSIDE"][border.position ?? 0]
         },
-        "/style/borders"
+        "/style/borders",
+        appearanceNode(source, node)
       );
     if (node.type === "INSTANCE") {
       const main = await node.getMainComponentAsync();
@@ -6214,7 +6495,16 @@
           actual: "characters" in n ? n.characters : null,
           message: `${s.name}: editable UTF-16 text ${"characters" in n && n.characters === s.attributedString?.string ? "is preserved" : "differs or is missing"}.`
         });
-      if (s._class === "symbolInstance") {
+      if (s._class === "symbolInstance" && s.symbolID === "") {
+        checks.push({
+          kind: "component-link",
+          sourceId: id,
+          passed: n.type === "FRAME" && n.children.length === 0,
+          expected: null,
+          actual: n.type === "FRAME" && n.children.length === 0 ? null : n.type,
+          message: `${s.name}: explicitly empty Sketch Symbol remains empty without inventing a component.`
+        });
+      } else if (s._class === "symbolInstance") {
         const master = n.type === "INSTANCE" ? await n.getMainComponentAsync() : null;
         const expectedComponent = ctx.resources.components.get(
           String(s.symbolID)
@@ -6229,9 +6519,7 @@
           message: `${s.name}: ${linked ? "linked to the resolved component" : "component link differs or is missing"}.`
         });
       }
-      const appearance = s._class === "shapeGroup" && "children" in n ? n.children.find(
-        (child) => child.getPluginData("sketch2figma:wrapper") === "boolean" && !child.getPluginData("sketch2figma:obsolete")
-      ) ?? n : n;
+      const appearance = appearanceNode(s, n);
       if (s.sharedStyleID) {
         const id2 = s.sharedStyleID;
         for (const [resource, field] of [
@@ -6411,6 +6699,49 @@
       if (!m) continue;
       const target = overrideTarget(n, m[1].split("/"));
       let passed;
+      let observed;
+      let hasObserved = false;
+      if (m[2] === "textHAlign") {
+        const expected = {
+          left: "LEFT",
+          center: "CENTER",
+          right: "RIGHT",
+          justify: "JUSTIFIED",
+          justified: "JUSTIFIED"
+        }[String(o.value).toLowerCase()];
+        observed = target && "textAlignHorizontal" in target ? target.textAlignHorizontal : null;
+        hasObserved = true;
+        passed = !!expected && observed === expected;
+      }
+      if (m[2] === "textWeight") {
+        hasObserved = true;
+        observed = null;
+        passed = false;
+        if (target?.type === "TEXT" || target?.type === "TEXT_PATH") {
+          const fonts = target.characters.length ? target.getRangeAllFontNames(0, target.characters.length) : typeof target.fontName === "symbol" ? [] : [target.fontName];
+          observed = fonts;
+          try {
+            const styles = fontTraitStyleNames(o.value);
+            passed = fonts.length > 0 && fonts.every((font) => styles.includes(normalizeFont(font.style)));
+          } catch {
+          }
+        }
+      }
+      const shadow = m[2].match(/^color:(shadow|innerShadow)-(\d+)$/);
+      if (shadow) {
+        const type = shadow[1] === "shadow" ? "DROP_SHADOW" : "INNER_SHADOW";
+        const effect = target && "effects" in target ? target.effects.filter((effect2) => effect2.type === type)[Number(shadow[2])] : void 0;
+        const expected = ctx.color(o.value);
+        observed = effect?.color ?? null;
+        hasObserved = true;
+        passed = !!effect && ["r", "g", "b", "a"].every(
+          (channel) => Math.abs(effect.color[channel] - expected[channel]) <= 1e-6
+        );
+        if (o.value?.swatchID) {
+          const variable = ctx.resources.variables.get(o.value.swatchID);
+          passed = passed && !!variable && effect?.boundVariables?.color?.id === variable.id;
+        } else passed = passed && !effect?.boundVariables?.color;
+      }
       if (m[2] === "stringValue")
         passed = !!target && "characters" in target && target.characters === String(o.value);
       if (m[2] === "isVisible")
@@ -6423,7 +6754,7 @@
           sourceId: sourceId(s),
           passed,
           expected: o.value,
-          actual: !target ? null : m[2] === "stringValue" && "characters" in target ? target.characters : m[2] === "isVisible" ? target.visible : target.type === "INSTANCE" ? (await target.getMainComponentAsync())?.getPluginData(
+          actual: hasObserved ? observed : !target ? null : m[2] === "stringValue" && "characters" in target ? target.characters : m[2] === "isVisible" ? target.visible : target.type === "INSTANCE" ? (await target.getMainComponentAsync())?.getPluginData(
             "sketch2figma:sourceId"
           ) : null,
           message: `${s.name}: ${o.overrideName} ${passed ? "matches" : "differs from"} the source override.`
@@ -6665,7 +6996,7 @@
             }
             return node;
           }
-          if (node.type === "INSTANCE" && s._class !== "symbolInstance" || node.type === "COMPONENT" && s._class !== "symbolMaster" || s._class === "symbolInstance" && node.type !== "INSTANCE") {
+          if (node.type === "INSTANCE" && s._class !== "symbolInstance" || node.type === "COMPONENT" && s._class !== "symbolMaster" || s._class === "symbolInstance" && !isEmptySymbol(s) && node.type !== "INSTANCE") {
             c.finding(
               "TYPE_CONFLICT",
               "Source node type changed; existing editable node preserved to protect component relationships.",
@@ -6682,7 +7013,7 @@
             await loadCurrentFonts(c, node);
           report.updated++;
         } else {
-          if (s._class === "symbolInstance") {
+          if (s._class === "symbolInstance" && !isEmptySymbol(s)) {
             const component = c.resources.components.get(String(s.symbolID));
             if (component) node = component.createInstance();
             else {
@@ -6695,7 +7026,11 @@
                 "error"
               );
             }
-          } else node = createNode(c, s);
+          } else
+            node = createNode(
+              c,
+              isEmptySymbol(s) ? { ...s, _class: "emptySymbol" } : s
+            );
           journal.track(node);
           report.created++;
         }
@@ -6723,8 +7058,19 @@
           if (node.type === "TEXT" && !c.resources.texts.has(s.sharedStyleID))
             await node.setTextStyleIdAsync("");
         }
+        if ("layoutMode" in node && node.type !== "INSTANCE" && node.layoutMode !== "NONE") {
+          node.primaryAxisSizingMode = "FIXED";
+          node.counterAxisSizingMode = "FIXED";
+          node.layoutMode = "NONE";
+        }
         await applyGeometry(c, s, node);
         if (s._class !== "shapeGroup") await applyAppearance(c, s, node);
+        if (isEmptySymbol(s))
+          c.ledger(s).mark(
+            "/symbolID",
+            "Editable Equivalent",
+            "Explicitly empty Sketch Symbol retained as an empty editable frame; no component invented."
+          );
         if ((node.type === "TEXT" || node.type === "TEXT_PATH") && s._class === "text")
           try {
             await applyText(c, s, node, () => bindStyles(c, s, node));
@@ -6778,14 +7124,7 @@
           c.ledger(s).mark("/symbolID");
         }
         await applyGuidesGrids(c, s, node);
-        if (node.type !== "TEXT")
-          await bindStyles(
-            c,
-            s,
-            s._class === "shapeGroup" && "children" in node ? node.children.find(
-              (child) => child.getPluginData("sketch2figma:wrapper") === "boolean" && !child.getPluginData("sketch2figma:obsolete")
-            ) ?? node : node
-          );
+        if (node.type !== "TEXT") await bindStyles(c, s, appearanceNode(s, node));
         c.ledger(s).result.targetId = node.id;
         writeData(node, "source", ownSource(s));
         return node;
@@ -7058,6 +7397,7 @@
         appearance.isMask = false;
         appearance.name = `Mask appearance / ${source.name}`;
         appearance.setPluginData("sketch2figma:wrapper", "outline-paint");
+        appearance.setPluginData("sketch2figma:paintFor", sourceId(source));
         appearance.setPluginData("sketch2figma:documentId", ctx.file.documentId);
         const container = mask.parent;
         const position = mask.relativeTransform;
@@ -7079,7 +7419,10 @@
         if ("fills" in geometry && (typeof geometry.fills === "symbol" || !geometry.fills.some(
           (p) => p.visible !== false && (p.opacity ?? 1) > 0
         ))) {
-          geometry.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
+          geometry.fills = [
+            ...typeof geometry.fills === "symbol" ? [] : geometry.fills,
+            { type: "SOLID", color: { r: 1, g: 1, b: 1 } }
+          ];
         }
         if ("effects" in geometry) geometry.effects = [];
         ctx.finding(
