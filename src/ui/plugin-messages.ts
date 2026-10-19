@@ -20,6 +20,7 @@ export type ImportSummary = {
 };
 type PluginMessage =
   | { type: "ready"; fonts: FontName[]; hasReport?: boolean }
+  | { type: "fonts"; requestId: string; fonts: FontName[] }
   | { type: "progress"; requestId: string; done: number }
   | { type: "report"; requestId: string; report: ImportSummary }
   | { type: "saved-report"; report: ImportSummary }
@@ -90,6 +91,14 @@ export function readPluginMessage(data: unknown): PluginMessage | undefined {
   if (!record(data) || !record(data.pluginMessage)) return;
   const m = data.pluginMessage;
   switch (m.type) {
+    case "fonts":
+      if (
+        requestId(m.requestId) &&
+        Array.isArray(m.fonts) &&
+        m.fonts.every(fontName)
+      )
+        return { type: "fonts", requestId: m.requestId, fonts: m.fonts };
+      break;
     case "ready":
       if (Array.isArray(m.fonts) && m.fonts.every(fontName))
         return {

@@ -132,6 +132,16 @@
         <div id="token-name" class="attachment" hidden></div>
       </div>
       <section
+        id="font-warning"
+        class="content font-warning"
+        aria-labelledby="font-warning-title"
+        hidden
+      >
+        <h2 id="font-warning-title" tabindex="-1">Missing fonts</h2>
+        <ul id="missing-fonts" aria-label="Unavailable source fonts"></ul>
+        <p id="font-warning-description"></p>
+      </section>
+      <section
         id="report-panel"
         class="content"
         aria-labelledby="report-title"
@@ -150,9 +160,13 @@
       <button id="view-report" class="secondary view-report" hidden>
         View failed checks
       </button>
-      <div class="actions">
+      <div id="import-actions" class="actions">
         <button id="cancel" class="secondary" hidden>Cancel</button
         ><button id="import" class="primary" disabled>Import</button>
+      </div>
+      <div id="font-warning-actions" class="actions" hidden>
+        <button id="font-cancel" class="secondary">Cancel</button>
+        <button id="font-continue" class="primary">Continue</button>
       </div>
     </footer>
     <script>

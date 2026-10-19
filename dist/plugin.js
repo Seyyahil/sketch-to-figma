@@ -2514,6 +2514,26 @@
       tokenNames
     };
   }
+  function importFontNames(file, options) {
+    const plan = resourceSelection(file, options), fonts = /* @__PURE__ */ new Set();
+    const scan = (value) => {
+      if (!value || typeof value !== "object") return;
+      const o = value;
+      if (o._class === "fontDescriptor" && typeof o.attributes?.name === "string")
+        fonts.add(o.attributes.name);
+      if (o.MSAttributedStringFontAttribute?.attributes?.name)
+        fonts.add(o.MSAttributedStringFontAttribute.attributes.name);
+      for (const [key, child] of Object.entries(o))
+        if (key !== "layers" && key !== "userInfo") scan(child);
+    };
+    for (const layer of plan.layers) scan(layer);
+    for (const style2 of [
+      ...sourceStyles(file, "layerStyles"),
+      ...sourceStyles(file, "textStyles")
+    ])
+      if (plan.styles.has(sourceId(style2))) scan(style2.value);
+    return [...fonts];
+  }
 
   // src/figma/context.ts
   var ImportContext = class {
@@ -6855,6 +6875,7 @@
       );
       ctx.cancelled = cancelled;
       const c = ctx;
+      const replacementFonts = /* @__PURE__ */ new Map();
       const plan = resourceSelection(file, options);
       c.resourceSelection = plan;
       const scope = plan.scope, available = masters(file), needed = plan.symbols, mutable = /* @__PURE__ */ new Set();
@@ -7131,6 +7152,22 @@
       }
       try {
         c.fonts = await api.listAvailableFontsAsync();
+        if (c.cancelled) throw new Error("IMPORT_CANCELLED");
+        for (const name of importFontNames(file, options)) {
+          const replacement = options.fontMap[name] ?? (!matchFont(name, c.fonts) ? options.fallbackFont : void 0);
+          if (replacement) replacementFonts.set(name, replacement);
+        }
+        await Promise.all(
+          [
+            ...new Map(
+              [...replacementFonts.values()].map((font) => [
+                JSON.stringify(font),
+                font
+              ])
+            ).values()
+          ].map((font) => api.loadFontAsync(font))
+        );
+        if (c.cancelled) throw new Error("IMPORT_CANCELLED");
         await importResources(c);
         const dep = dependencyOrder(available);
         for (const cycle of dep.cycles)
@@ -7315,6 +7352,21 @@
           c.finding("RECOVERY_FAILURE", error, void 0, void 0, "error");
         report.sourceMetadataPreserved = false;
       }
+      if (report.state === "complete")
+        for (const [name, font] of replacementFonts) {
+          const substitution = `${name} \u2192 ${font.family} ${font.style}`;
+          if (!report.findings.some(
+            (finding) => finding.code === "FONT_REPLACED" && finding.message === substitution
+          ))
+            c.finding(
+              "FONT_FALLBACK",
+              `Approved fallback: ${substitution}.`,
+              void 0,
+              void 0,
+              "warning",
+              "textStyles"
+            );
+        }
       for (const source of walkLayers(input.pages))
         if (!c.ledgers.has(sourceId(source))) c.ledger(source, false);
       c.finish();
@@ -7511,6 +7563,15 @@
     try {
       if (m.type === "ui-ready") {
         await initialize();
+        return;
+      }
+      if (m.type === "get-fonts" && typeof m.requestId === "string") {
+        const fonts = await figma.listAvailableFontsAsync();
+        send({
+          type: "fonts",
+          requestId: m.requestId,
+          fonts: fonts.map((font) => font.fontName)
+        });
         return;
       }
       if (m.type === "get-report") {

@@ -5,6 +5,7 @@ import { readPluginMessage, type ImportSummary } from "./plugin-messages";
 import { parseSketch } from "../sketch/archive";
 import { importFontNames } from "../core/resource-selection";
 import { matchFont } from "../figma/typography";
+import { interFallbackMap } from "./font-fallback";
 import { validateTokens } from "../figma/resources";
 import {
   DEFAULT_OPTIONS,
@@ -21,6 +22,10 @@ interface QueueItem {
   file?: SketchFile;
   error?: string;
   parsing: boolean;
+}
+interface PendingImport {
+  input: QueueItem[];
+  options: ImportOptions;
 }
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -44,6 +49,14 @@ const pending = new Map<
     reject: (error: Error) => void;
   }
 >();
+const fontRequests = new Map<
+  string,
+  { resolve: (fonts: FontName[]) => void; reject: (error: Error) => void }
+>();
+const fontCheckCancelled = new Error("Cancelled");
+let checkingFonts = false;
+let fontWarning: PendingImport | undefined;
+const locked = () => running || checkingFonts || !!fontWarning;
 let reportOpen = false,
   hasSavedReport = false,
   readingReport = false;
@@ -75,23 +88,26 @@ function removeButton(label: string, remove: () => void) {
   const button = el("button", "×");
   button.className = "icon";
   button.setAttribute("aria-label", label);
-  button.disabled = running;
+  button.disabled = locked();
   button.onclick = () => {
-    if (!running) remove();
+    if (!locked()) remove();
   };
   return button;
 }
 function render() {
-  $("import-panel").setAttribute("aria-busy", String(running));
+  $("import-panel").setAttribute("aria-busy", String(running || checkingFonts));
   $("import-indicator").hidden = !running;
-  $("import-content").hidden = running || reportOpen;
+  $("import-content").hidden = running || reportOpen || !!fontWarning;
+  $("font-warning").hidden = !fontWarning;
+  $("font-warning-actions").hidden = !fontWarning;
+  $("import-actions").hidden = !!fontWarning;
   $("report-panel").hidden = running || !reportOpen;
   $("import-panel").classList.toggle("showing-report", reportOpen && !running);
   $("import-footer").hidden = reportOpen && !running;
   const failed = reports.reduce((n, r) => n + focusedReport(r).issueCount, 0);
   const reportButton = $("view-report") as HTMLButtonElement;
   reportButton.hidden =
-    running || reportOpen || (!reports.length && !hasSavedReport);
+    locked() || reportOpen || (!reports.length && !hasSavedReport);
   reportButton.disabled = readingReport;
   reportButton.textContent = readingReport
     ? "Loading report…"
@@ -160,20 +176,20 @@ function render() {
       }),
     );
   }
-  $("drop").toggleAttribute("disabled", running);
-  $("files").toggleAttribute("disabled", running);
-  $("resources").toggleAttribute("disabled", running);
+  $("drop").toggleAttribute("disabled", locked());
+  $("files").toggleAttribute("disabled", locked());
+  $("resources").toggleAttribute("disabled", locked());
   $("import").toggleAttribute(
     "disabled",
-    running ||
+    locked() ||
       !initialized ||
       tokenLoading ||
       !!tokenError ||
       !queue.length ||
       queue.some((q) => q.parsing || !!q.error || !q.file),
   );
-  $("cancel").hidden = !running;
-  $("cancel").toggleAttribute("disabled", cancelled);
+  $("cancel").hidden = !running && !checkingFonts;
+  $("cancel").toggleAttribute("disabled", running && cancelled);
   $("progress").hidden = !running;
 }
 async function acceptParsed(
@@ -292,7 +308,7 @@ async function attachTokens(source: File) {
   }
 }
 async function addFiles(files: File[]) {
-  if (running) return;
+  if (locked()) return;
   status("");
   // Start each read before awaiting; all outstanding files keep Import disabled.
   await Promise.all(
@@ -312,13 +328,13 @@ $("files").onchange = (event) => {
 for (const type of ["dragover", "dragleave", "drop"])
   document.addEventListener(type, (event) => {
     event.preventDefault();
-    if (running) return;
+    if (locked()) return;
     $("drop").classList.toggle("drag", type === "dragover");
     if (type === "drop")
       void addFiles([...((event as DragEvent).dataTransfer?.files ?? [])]);
   });
 async function importBatch() {
-  if (running || $("import").hasAttribute("disabled")) return;
+  if (locked() || $("import").hasAttribute("disabled")) return;
   const input = [...queue],
     options: ImportOptions = {
       ...DEFAULT_OPTIONS,
@@ -327,19 +343,50 @@ async function importBatch() {
       ),
       tokens,
     };
-  const missing = [
-    ...new Set(input.flatMap((q) => importFontNames(q.file!, options))),
-  ].filter(
-    (name) =>
-      !matchFont(
-        name,
-        fonts.map((fontName) => ({ fontName })),
-      ),
-  );
-  if (missing.length) {
-    status(`Missing fonts: ${missing.join(", ")}`, true);
-    return;
+  checkingFonts = true;
+  status("Checking fonts…");
+  render();
+  try {
+    const id = requestId();
+    const response = new Promise<FontName[]>((resolve, reject) =>
+      fontRequests.set(id, { resolve, reject }),
+    );
+    post({ type: "get-fonts", requestId: id });
+    fonts = await response;
+    const missing = [
+      ...new Set(input.flatMap((q) => importFontNames(q.file!, options))),
+    ].filter(
+      (name) =>
+        !matchFont(
+          name,
+          fonts.map((fontName) => ({ fontName })),
+        ),
+    );
+    if (missing.length) {
+      fontWarning = {
+        input,
+        options: { ...options, fontMap: interFallbackMap(missing, fonts) },
+      };
+      $("missing-fonts").replaceChildren();
+      for (const name of missing) $("missing-fonts").append(el("li", name));
+      $("font-warning-description").textContent =
+        "Continue with Inter, keeping matching weights and italics where available. Text appearance and wrapping may change.";
+      status("");
+      checkingFonts = false;
+      render();
+      $("font-warning-title").focus();
+      return;
+    }
+    checkingFonts = false;
+    await runBatch(input, options);
+  } catch (error) {
+    status(message(error), error !== fontCheckCancelled);
+  } finally {
+    checkingFonts = false;
+    render();
   }
+}
+async function runBatch(input: QueueItem[], options: ImportOptions) {
   running = true;
   reportOpen = false;
   reports.length = 0;
@@ -399,7 +446,7 @@ function showReports() {
   render();
 }
 $("view-report").onclick = () => {
-  if (running || readingReport) return;
+  if (locked() || readingReport) return;
   if (reports.length) showReports();
   else {
     readingReport = true;
@@ -412,7 +459,31 @@ $("report-back").onclick = () => {
   render();
 };
 $("import").onclick = () => void importBatch();
+function cancelFontWarning() {
+  if (!fontWarning) return;
+  fontWarning = undefined;
+  status("");
+  render();
+  $("import").focus();
+}
+$("font-cancel").onclick = cancelFontWarning;
+$("font-continue").onclick = () => {
+  const confirmed = fontWarning;
+  if (!confirmed) return;
+  fontWarning = undefined;
+  void runBatch(confirmed.input, confirmed.options);
+};
+document.addEventListener("keydown", (event) => {
+  if ((event as KeyboardEvent).key === "Escape") cancelFontWarning();
+});
 $("cancel").onclick = () => {
+  if (checkingFonts && !running) {
+    for (const [id, request] of fontRequests) {
+      fontRequests.delete(id);
+      request.reject(fontCheckCancelled);
+    }
+    return;
+  }
   if (!running) return;
   cancelled = true;
   post({ type: "cancel" });
@@ -427,6 +498,10 @@ window.onmessage = (event) => {
     hasSavedReport = m.hasReport === true;
     fonts = m.fonts;
     render();
+  }
+  if (m.type === "fonts") {
+    fontRequests.get(m.requestId)?.resolve(m.fonts);
+    fontRequests.delete(m.requestId);
   }
   if (
     m.type === "progress" &&
@@ -451,6 +526,8 @@ window.onmessage = (event) => {
     readingReport = false;
     render();
     if (m.requestId) {
+      fontRequests.get(m.requestId)?.reject(new Error(m.message));
+      fontRequests.delete(m.requestId);
       pending.get(m.requestId)?.reject(new Error(m.message));
       pending.delete(m.requestId);
     } else status(m.message, true);

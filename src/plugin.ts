@@ -39,6 +39,15 @@ figma.ui.onmessage = async (message: unknown) => {
       await initialize();
       return;
     }
+    if (m.type === "get-fonts" && typeof m.requestId === "string") {
+      const fonts = await figma.listAvailableFontsAsync();
+      send({
+        type: "fonts",
+        requestId: m.requestId,
+        fonts: fonts.map((font) => font.fontName),
+      });
+      return;
+    }
     if (m.type === "get-report") {
       if (running) return;
       const id = savedReportId(figma),

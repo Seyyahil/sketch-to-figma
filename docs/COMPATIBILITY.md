@@ -31,7 +31,7 @@ Audited against @figma/plugin-typings 1.141.0 on 2026-10-08. This is a capabilit
 | 4 | Tokens/aliases/themes | variable collections/modes/aliases | N for compatible types; plan limits/errors reported |
 | 4 | Existing styles/variables | get/import style and variable APIs | N with explicit mapping |
 | 5 | UTF-16 rich text ranges | setRange* methods | N; validate bounds |
-| 5 | Font family/style/size | loadFontAsync, fontName/fontSize | N; replacement P |
+| 5 | Font family/style/size | loadFontAsync, fontName/fontSize | N for available exact fonts; user-approved Inter replacement P, matching named weights/italics where available |
 | 5 | Variable font axes | FontName.variationSettings | N supported tags; numeric Sketch tags decoded |
 | 5 | Kerning/line height/spacing | letterSpacing, lineHeight, paragraphSpacing | P; pair kerning and baseline differ |
 | 5 | Alignment/indent/lists | textAlign*, paragraphIndent, setRangeListOptions | N compatible values |
@@ -118,3 +118,7 @@ Modern native operand constraints: [Figma fill/stroke geometry and unsupported F
 Private version-173 and version-196 archive checks exposed legacy Smart Layout reflow, explicit empty Symbol slots and additional source override kinds. These now have general conversion paths and regressions. The version-173 archive parses without importer caps; worker asset buffers transfer instead of cloning. Browser image decoding, Figma memory limits and native rendering are separate acceptance gates.
 
 Border/resource validation reads operative compound geometry and retained outline-mask paint layers. It does not hide unresolved color aliases, stale override paths or incompatible original Text Style bindings. No new source resources are inferred. See VALIDATION.md for measured coverage and remaining failures.
+
+## Missing-font continuation (2026-10-19)
+
+The panel no longer treats missing source fonts as an unconditional whole-file blocker. It refreshes availability, explains the approximation, and waits for Continue before using an explicit Inter mapping. If the required Inter fallback itself cannot load, conversion stops before creating source resources/nodes. A font replacement can change glyphs, wrapping and dimensions even with matching weights and sizes. Compatible original style/component links are retained through the shared mapping path; incompatible source overrides still produce findings. No fonts are downloaded or silently inferred as source-native.

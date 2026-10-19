@@ -2,7 +2,7 @@ import { writeReport } from "./report-storage";
 import { applyOpacityMask } from "./opacity-masks";
 import { finishReport, Ledger } from "../core/audit";
 import { dependencyOrder, masters } from "../core/dependencies";
-import { resourceSelection } from "../core/resource-selection";
+import { importFontNames, resourceSelection } from "../core/resource-selection";
 import { fingerprint, transform } from "../core/math";
 import {
   DEFAULT_OPTIONS,
@@ -30,7 +30,7 @@ import {
 } from "./storage";
 import { appearanceNode, applyAppearance } from "./appearance";
 import { applyGeometry, createNode } from "./geometry";
-import { applyText, loadCurrentFonts } from "./typography";
+import { applyText, loadCurrentFonts, matchFont } from "./typography";
 import { applyChildLayout, applyGuidesGrids, applyLayout } from "./layout";
 import {
   bindStyles,
@@ -105,6 +105,7 @@ export function startImport(
     );
     ctx.cancelled = cancelled;
     const c = ctx;
+    const replacementFonts = new Map<string, FontName>();
     const plan = resourceSelection(file, options);
     c.resourceSelection = plan;
     const scope = plan.scope,
@@ -445,6 +446,25 @@ export function startImport(
     }
     try {
       c.fonts = await api.listAvailableFontsAsync();
+      if (c.cancelled) throw new Error("IMPORT_CANCELLED");
+      // Validate only replacements used by this file before creating source resources/nodes.
+      for (const name of importFontNames(file, options)) {
+        const replacement =
+          options.fontMap[name] ??
+          (!matchFont(name, c.fonts) ? options.fallbackFont : undefined);
+        if (replacement) replacementFonts.set(name, replacement);
+      }
+      await Promise.all(
+        [
+          ...new Map(
+            [...replacementFonts.values()].map((font) => [
+              JSON.stringify(font),
+              font,
+            ]),
+          ).values(),
+        ].map((font) => api.loadFontAsync(font)),
+      );
+      if (c.cancelled) throw new Error("IMPORT_CANCELLED");
       await importResources(c);
       const dep = dependencyOrder(available);
       for (const cycle of dep.cycles)
@@ -650,6 +670,27 @@ export function startImport(
         c.finding("RECOVERY_FAILURE", error, undefined, undefined, "error");
       report.sourceMetadataPreserved = false;
     }
+    // Unchanged reimports can reuse every layer, so retain a visible font notice
+    // even when no individual text setter needed to run this time.
+    if (report.state === "complete")
+      for (const [name, font] of replacementFonts) {
+        const substitution = `${name} → ${font.family} ${font.style}`;
+        if (
+          !report.findings.some(
+            (finding) =>
+              finding.code === "FONT_REPLACED" &&
+              finding.message === substitution,
+          )
+        )
+          c.finding(
+            "FONT_FALLBACK",
+            `Approved fallback: ${substitution}.`,
+            undefined,
+            undefined,
+            "warning",
+            "textStyles",
+          );
+      }
     for (const source of walkLayers(input.pages))
       if (!c.ledgers.has(sourceId(source))) c.ledger(source, false);
     c.finish();

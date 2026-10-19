@@ -34,6 +34,26 @@ input {
   letter-spacing: inherit;
   color: inherit;
 }
+.font-warning h2 {
+  margin: 0 0 16px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+.font-warning p {
+  margin: 16px 0 0;
+  color: var(--figma-color-text-secondary, #666);
+  line-height: 1.7;
+}
+#missing-fonts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 180px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
 button {
   cursor: pointer;
 }

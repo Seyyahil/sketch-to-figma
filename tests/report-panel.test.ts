@@ -16,6 +16,41 @@ beforeAll(async () => {
   });
   plugin = r.outputFiles[0].text;
 });
+it("refreshes the available font inventory without document edits and returns request-specific failures", async () => {
+  const h = createHost(),
+    messages: any[] = [];
+  const api = h.api as any,
+    before = h.nodes.size;
+  api.showUI = () => {};
+  api.ui = { postMessage: (message: unknown) => messages.push(message) };
+  let fonts: FontName[] = [{ family: "Inter", style: "Regular" }];
+  api.listAvailableFontsAsync = async () =>
+    fonts.map((fontName) => ({ fontName }));
+  runInNewContext(plugin, {
+    figma: api,
+    __html__: "",
+    Uint8Array,
+    TextEncoder,
+    TextDecoder,
+    setTimeout,
+  });
+  await api.ui.onmessage({ type: "get-fonts", requestId: "first" });
+  expect(messages.pop()).toEqual({ type: "fonts", requestId: "first", fonts });
+  fonts = [...fonts, { family: "Cera Pro", style: "Regular" }];
+  await api.ui.onmessage({ type: "get-fonts", requestId: "second" });
+  expect(messages.pop()).toEqual({ type: "fonts", requestId: "second", fonts });
+  api.listAvailableFontsAsync = async () => {
+    throw new Error("Font service unavailable");
+  };
+  await api.ui.onmessage({ type: "get-fonts", requestId: "third" });
+  expect(messages.pop()).toMatchObject({
+    type: "error",
+    requestId: "third",
+    message: expect.stringContaining("Font service unavailable"),
+  });
+  expect(h.nodes.size).toBe(before);
+  expect(h.styles.size).toBe(0);
+});
 it("loads existing reports lazily, sends inspection details, and focuses an affected layer", async () => {
   const h = createHost(),
     file = bindingFixture();

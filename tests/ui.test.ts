@@ -82,6 +82,7 @@ class Element {
   files: any[] = [];
   value = "";
   disabled = false;
+  focused = false;
   classList = { toggle() {} };
   onclick?: () => void;
   onchange?: (event: any) => void;
@@ -111,12 +112,21 @@ class Element {
   click() {
     if (!this.hasAttribute("disabled") && !this.disabled) this.onclick?.();
   }
+  focus() {
+    this.focused = true;
+  }
 }
 function panel({
   ready = true,
   decodeImage,
+  fonts = [],
+  refreshFonts = () => fonts,
+  autoFontReply = true,
 }: {
   ready?: boolean;
+  fonts?: FontName[];
+  refreshFonts?: () => FontName[];
+  autoFontReply?: boolean;
   decodeImage?: (
     blob: Blob,
   ) => Promise<{ width: number; height: number; close(): void }>;
@@ -133,6 +143,12 @@ function panel({
     parent = {
       postMessage(m: any) {
         posts.push(m.pluginMessage);
+        if (m.pluginMessage.type === "get-fonts" && autoFontReply)
+          receive({
+            type: "fonts",
+            requestId: m.pluginMessage.requestId,
+            fonts: refreshFonts(),
+          });
       },
     };
   const listeners = new Map<string, (event: any) => void>();
@@ -180,7 +196,7 @@ function panel({
     window.onmessage({ source, data });
   const receive = (m: unknown, source: unknown = host) =>
     receiveRaw({ pluginMessage: m }, source);
-  if (ready) receive({ type: "ready", fonts: [] });
+  if (ready) receive({ type: "ready", fonts });
   const flush = async () => {
     for (let i = 0; i < 8; i++) await Promise.resolve();
   };
@@ -247,13 +263,118 @@ it("sends the actual resource switches while preserving whole-document import an
   expect(ui.node("status").textContent).toBe("Imported");
   expect(ui.node("drop").hasAttribute("disabled")).toBe(false);
 });
-it("blocks missing fonts before making native changes", async () => {
+it("warns about missing fonts and waits for explicit approval before making native changes", async () => {
+  const ui = panel({ fonts: [{ family: "Inter", style: "Regular" }] });
+  await ui.parsed(await ui.add("text.sketch"), text);
+  ui.node("import").click();
+  await ui.flush();
+  expect(ui.imports()).toHaveLength(0);
+  expect(ui.node("font-warning").hidden).toBe(false);
+  expect(ui.node("font-warning-title").focused).toBe(true);
+  expect(
+    ui.node("missing-fonts").children.map((node) => node.textContent),
+  ).toEqual(["Arial-Regular"]);
+  expect(ui.node("font-warning-description").textContent).toContain(
+    "wrapping may change",
+  );
+  expect(ui.node("import-content").hidden).toBe(true);
+  expect(ui.node("import-actions").hidden).toBe(true);
+  ui.node("font-continue").click();
+  ui.node("font-continue").click();
+  await ui.flush();
+  expect(ui.imports()).toHaveLength(1);
+  expect(ui.imports()[0].options.fontMap).toEqual({
+    "Arial-Regular": { family: "Inter", style: "Regular" },
+  });
+  expect(
+    ui.imports()[0].file.pages[0].layers[0].attributedString.attributes[0]
+      .attributes.MSAttributedStringFontAttribute.attributes.name,
+  ).toBe("Arial-Regular");
+  expect(ui.node("font-warning").hidden).toBe(true);
+});
+it("cancels the font warning without dropping queued files or starting an import", async () => {
+  const ui = panel({ fonts: [{ family: "Inter", style: "Regular" }] });
+  await ui.parsed(await ui.add("text.sketch"), text);
+  ui.node("import").click();
+  await ui.flush();
+  await ui.drop([
+    { name: "unapproved.sketch", arrayBuffer: async () => new ArrayBuffer(1) },
+  ]);
+  expect(ui.reads).toHaveLength(1);
+  ui.node("font-cancel").click();
+  await ui.flush();
+  expect(ui.imports()).toHaveLength(0);
+  expect(ui.node("queue").children).toHaveLength(1);
+  expect(ui.node("import-content").hidden).toBe(false);
+  expect(ui.node("import").hasAttribute("disabled")).toBe(false);
+  expect(ui.node("import").focused).toBe(true);
+});
+it("uses a fresh font inventory before deciding a source font is missing", async () => {
+  const ui = panel({
+    refreshFonts: () => [{ family: "Arial", style: "Regular" }],
+  });
+  await ui.parsed(await ui.add("text.sketch"), text);
+  ui.node("import").click();
+  await ui.flush();
+  expect(ui.posts.filter((m) => m.type === "get-fonts")).toHaveLength(1);
+  expect(ui.node("font-warning").hidden).toBe(true);
+  expect(ui.imports()).toHaveLength(1);
+  expect(ui.imports()[0].options.fontMap).toEqual({});
+});
+it("reports an unavailable Inter fallback without starting an import", async () => {
   const ui = panel();
   await ui.parsed(await ui.add("text.sketch"), text);
   ui.node("import").click();
   await ui.flush();
   expect(ui.imports()).toHaveLength(0);
-  expect(ui.node("status").textContent).toContain("Missing fonts:");
+  expect(ui.node("status").textContent).toContain(
+    "Inter Regular is unavailable",
+  );
+  expect(ui.node("import").hasAttribute("disabled")).toBe(false);
+});
+it("ignores malformed and stale font replies and allows a slow font check to be cancelled", async () => {
+  const ui = panel({ autoFontReply: false });
+  await ui.parsed(await ui.add());
+  ui.node("import").click();
+  await ui.flush();
+  const request = ui.posts.find((m) => m.type === "get-fonts");
+  ui.receive({ type: "fonts", requestId: "stale", fonts: [] });
+  ui.receive({ type: "fonts", requestId: request.requestId, fonts: [null] });
+  await ui.flush();
+  expect(ui.imports()).toHaveLength(0);
+  expect(ui.node("status").textContent).toBe("Checking fonts…");
+  expect(ui.node("cancel").hidden).toBe(false);
+  ui.node("cancel").click();
+  await ui.flush();
+  expect(ui.node("status").textContent).toBe("Cancelled");
+  expect(ui.node("import").hasAttribute("disabled")).toBe(false);
+  ui.receive({ type: "fonts", requestId: request.requestId, fonts: [] });
+  await ui.flush();
+  expect(ui.imports()).toHaveLength(0);
+});
+it("recovers from a font-inventory error and accepts a subsequent import attempt", async () => {
+  const ui = panel({ autoFontReply: false });
+  await ui.parsed(await ui.add());
+  ui.node("import").click();
+  await ui.flush();
+  const first = ui.posts.find((m) => m.type === "get-fonts");
+  ui.receive({
+    type: "error",
+    requestId: first.requestId,
+    message: "Font inventory failed",
+  });
+  await ui.flush();
+  expect(ui.node("status").textContent).toBe("Font inventory failed");
+  expect(ui.node("import").hasAttribute("disabled")).toBe(false);
+  ui.node("import").click();
+  await ui.flush();
+  const second = ui.posts.filter((m) => m.type === "get-fonts").slice(-1)[0];
+  ui.receive({ type: "fonts", requestId: first.requestId, fonts: [] });
+  await ui.flush();
+  expect(ui.imports()).toHaveLength(0);
+  ui.receive({ type: "fonts", requestId: second.requestId, fonts: [] });
+  await ui.flush();
+  expect(ui.imports()).toHaveLength(1);
 });
 it("deduplicates repeated document IDs and ignores removed worker requests", async () => {
   const ui = panel();
