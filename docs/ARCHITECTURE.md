@@ -4,12 +4,15 @@
 The 13-section user specification is the product contract. API type availability is evidence of a writable surface, not evidence of visual fidelity. This project must never claim lossless conversion or production readiness from unit tests alone. Unknown properties remain visible in the conversion report, including schema additions in newer Sketch releases.
 
 ## Boundaries
-1. Browser worker: bounded ZIP inspection, UTF-8 JSON decoding, document/version validation, source indexing, asset extraction. No Figma writes and no network access.
+1. Browser worker: ZIP integrity inspection, UTF-8 JSON decoding, document/version validation, source indexing, asset extraction. No Figma writes and no network access.
 2. Core: immutable source objects, exact JSON-pointer leaf inventory, conversion ledger, dependency ordering, selection closure, stable identity, conflict planning, geometric/color math. Pure, testable code.
 3. Figma adapter: narrow native node creation; fonts loaded before text writes; separate resource, geometry, appearance, typography, layout, Symbol, and prototype passes. Current official plugin typings are a compile-time gate.
 4. Orchestrator: import one file transaction at a time, yield between layers, cancellation token, persistent journal, recovery, reimport identity. Failures are reported per property and layer. A failed or cancelled file removes newly created nodes/resources and restores modified nodes where supported; cleanup failures remain in the journal for recovery.
 5. UI: centered file drop area, batch queue, unused-resource switches, token JSON drag and drop, missing-font blocking, compact progress/results, and cancellation. Required dependencies always override resource exclusions. Advanced controls were removed at the user’s request.
 6. Validation: source-to-target structural snapshot, counts, hierarchy, dimensions, rotation, component links, text, resources, reactions, responsive baseline requirements, pixel comparison when reference renders are supplied.
+
+## Archive handling
+The importer does not impose archive-size, expanded-size, entry-size, entry-count, layer-count or nesting-depth caps. ZIP checks validate the archive structure, declared entry lengths, CRCs, paths and source identifiers. Layer validation uses an explicit stack. Browser memory, JavaScript and Figma API constraints still apply; multi-disk and ZIP64 archives remain unsupported. No new warning, confirmation or file-size control is added to the panel.
 
 ## Fidelity ledger
 Every scalar, null, empty object, and empty array is enumerated using escaped JSON pointers. Default outcome is Unsupported. A converter records Native, Editable Equivalent, Visual Equivalent, Partial, or Unsupported only for paths whose handling is known. Merely retaining metadata is not a visual conversion. A failed setter cannot leave a Native claim behind. Reports include observed properties even if the layer was not selected (explicitly marked outside import scope).

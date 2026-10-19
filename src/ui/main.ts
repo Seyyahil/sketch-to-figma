@@ -246,7 +246,7 @@ try {
     render();
   };
 } catch {
-  // Hosts that disallow blob workers use the same bounded parser on the UI thread.
+  // Hosts that disallow blob workers use the same parser on the UI thread.
 }
 async function addSketch(source: File) {
   const item: QueueItem = { id: requestId(), source, parsing: true };

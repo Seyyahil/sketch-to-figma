@@ -2,19 +2,10 @@ import { Inflate, strFromU8 } from "fflate";
 import { fingerprint } from "../core/math";
 import {
   sourceId,
-  walkLayers,
   type Finding,
   type Sketch,
   type SketchFile,
 } from "../core/types";
-export const LIMITS = {
-  archive: 256 * 1024 * 1024,
-  expanded: 512 * 1024 * 1024,
-  entry: 128 * 1024 * 1024,
-  entries: 20000,
-  layers: 150000,
-  depth: 256,
-};
 interface ZipEntry {
   name: string;
   size: number;
@@ -35,8 +26,6 @@ export function crc32(bytes: Uint8Array): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 export function inspectZip(bytes: Uint8Array): Map<string, ZipEntry> {
-  if (bytes.length > LIMITS.archive)
-    throw new Error("Archive exceeds 256 MiB safety limit.");
   if (bytes[0] !== 80 || bytes[1] !== 75)
     throw new Error(
       "Not a ZIP-based Sketch document. Pre-43 binary formats require saving with modern Sketch.",
@@ -63,11 +52,9 @@ export function inspectZip(bytes: Uint8Array): Map<string, ZipEntry> {
     offset === 0xffffffff
   )
     throw new Error("Multi-disk and ZIP64 archives are not supported.");
-  if (count > LIMITS.entries || offset + dirSize > end)
-    throw new Error("Invalid or oversized ZIP directory.");
+  if (offset + dirSize > end) throw new Error("Invalid ZIP directory.");
   const result = new Map<string, ZipEntry>();
-  let p = offset,
-    total = 0;
+  let p = offset;
   for (let i = 0; i < count; i++) {
     if (p + 46 > end || view.getUint32(p, true) !== 0x02014b50)
       throw new Error("Corrupted ZIP directory.");
@@ -91,9 +78,6 @@ export function inspectZip(bytes: Uint8Array): Map<string, ZipEntry> {
       result.has(name)
     )
       throw new Error(`Unsafe or duplicate archive path: ${name}`);
-    total += size;
-    if (size > LIMITS.entry || total > LIMITS.expanded)
-      throw new Error("Expanded archive exceeds safety limits.");
     result.set(name, {
       name,
       size,
@@ -120,7 +104,6 @@ export async function extractZip(
   const ordered = [...entries.values()].sort(
     (a, b) => a.localOffset - b.localOffset,
   );
-  let expanded = 0;
   for (const [i, e] of ordered.entries()) {
     const p = e.localOffset;
     if (p + 30 > bytes.length || view.getUint32(p, true) !== 0x04034b50)
@@ -181,11 +164,11 @@ export async function extractZip(
     const output = new Uint8Array(e.size);
     let at = 0;
     const accept = (data: Uint8Array) => {
+      // Check archive integrity against its own declared length, not a size cap.
+      if (data.length > e.size - at)
+        throw new Error(`ZIP length mismatch: ${e.name}`);
+      output.set(data, at);
       at += data.length;
-      expanded += data.length;
-      if (at > e.size || expanded > LIMITS.expanded)
-        throw new Error(`ZIP expansion limit exceeded: ${e.name}`);
-      output.set(data, at - data.length);
     };
     if (method === 0) accept(bytes.subarray(start, end));
     else {
@@ -240,10 +223,10 @@ export async function parseSketch(
       p._ref ? read(`${p._ref}.json`) : p,
     );
   const seen = new Set<string>();
-  let count = 0;
-  const validate = (n: Sketch, depth: number) => {
-    if (depth > LIMITS.depth || ++count > LIMITS.layers)
-      throw new Error("Document layer depth/count exceeds limits.");
+  // Use an explicit stack so validation does not impose a nesting-depth cap.
+  const pending: Sketch[] = [...pages].reverse();
+  while (pending.length) {
+    const n = pending.pop()!;
     if (
       !n ||
       typeof n !== "object" ||
@@ -262,9 +245,9 @@ export async function parseSketch(
       throw new Error("Negative layer dimensions.");
     if (n.layers !== undefined && !Array.isArray(n.layers))
       throw new Error("Invalid children list.");
-    for (const c of n.layers ?? []) validate(c, depth + 1);
-  };
-  for (const p of pages) validate(p, 0);
+    const children = n.layers ?? [];
+    for (let i = children.length - 1; i >= 0; i--) pending.push(children[i]);
+  }
   const documentId = String(document.do_objectID ?? meta.documentID ?? "");
   if (!documentId)
     throw new Error(

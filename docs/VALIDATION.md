@@ -1,3 +1,11 @@
+# Importer cap removal (2026-10-19)
+
+Removed the importer-defined 256 MiB archive, 512 MiB expanded-data, 128 MiB entry, 20,000 entry, 150,000 layer and 256-level nesting caps. Layer validation now uses an explicit stack. ZIP structure, path, encryption/compression compatibility, declared-length, CRC, source-ID and frame validation remain. Malformed expansion beyond the entry's own declared length still fails with a length-mismatch error. Multi-disk and ZIP64 archives remain unsupported; browser memory, JavaScript and Figma API constraints still apply.
+
+Verification in an isolated temporary workspace: `npm run check` passed TypeScript, **195 tests**, and the production plugin/UI build. **13 private-archive cases were explicitly skipped** because the separately supplied Test.sketch was unavailable. No fixture archive was restored, generated on disk or downloaded. Temporary dependencies were kept outside the repository and removed after verification.
+
+Six added regressions cover extraction of a real ZIP larger than 256 MiB (unreferenced ZIP padding keeps its actual extracted content small), inspection of 20,001 entries, directory metadata describing two 300 MiB entries, rejection of data exceeding its declared entry length, parsing 150,001 child layers, and parsing 300 nested groups. The large-entry metadata test does not allocate or decompress 600 MiB and does not establish native large-file memory performance. Existing corrupt/truncated/path/CRC/duplicate-ID checks still pass. No native Figma import or user-reported archive was available for this run.
+
 # Public repository test setup (2026-10-09)
 
 `Test.sketch` is a private, separately supplied acceptance archive and is excluded from Git. Use `SKETCH_FIXTURE=/path/to/Test.sketch npm run check` for the full suite. Without an archive, the acceptance cases are explicitly skipped while unit tests run; an invalid explicitly supplied path fails instead of silently skipping. No fixture is downloaded, recreated or copied into the repository. Earlier references to the repository archive below describe historical runs.
