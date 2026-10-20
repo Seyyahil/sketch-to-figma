@@ -1,5 +1,5 @@
 /** Bump when a conversion fix must be applied to unchanged imported source nodes. */
-export const CONVERTER_REVISION = 11;
+export const CONVERTER_REVISION = 14;
 
 /** Sketch is deliberately open: future schema fields must survive inspection. */
 export type Sketch = Record<string, any>;
@@ -62,6 +62,9 @@ export interface ConversionReport {
 export interface Asset {
   path: string;
   bytes: Uint8Array;
+  /** Native-host handles assigned after incremental transfer, never source properties. */
+  imageHash?: string;
+  imageError?: string;
   originalByteLength?: number;
   tiles?: {
     width: number;

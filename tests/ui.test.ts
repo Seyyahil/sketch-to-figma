@@ -5,6 +5,7 @@ import { build } from "esbuild";
 import { parseSketch } from "../src/sketch/archive";
 import { imageDimensions } from "../src/ui/asset-preparation";
 import type { SketchFile } from "../src/core/types";
+import { ASSET_CHUNK_BYTES } from "../src/ui/asset-transfer";
 
 let code: string, shapes: SketchFile, text: SketchFile;
 beforeAll(async () => {
@@ -135,7 +136,11 @@ function panel({
     posts: any[] = [],
     reads: any[] = [];
   const node = (id: string) => {
-    if (!nodes.has(id)) nodes.set(id, new Element());
+    if (!nodes.has(id)) {
+      const element = new Element();
+      if (id === "replace-edits") element.checked = false;
+      nodes.set(id, element);
+    }
     return nodes.get(id)!;
   };
   const window: any = {},
@@ -248,6 +253,7 @@ it("sends the actual resource switches while preserving whole-document import an
   });
   expect(request.options.selectedIds).toEqual([]);
   expect(request.options.fallbackFont).toBeUndefined();
+  expect(request.options.conflict).toBe("preserve-local");
   expect(ui.node("drop").hasAttribute("disabled")).toBe(true);
   ui.receive({
     type: "report",
@@ -262,6 +268,15 @@ it("sends the actual resource switches while preserving whole-document import an
   await ui.flush();
   expect(ui.node("status").textContent).toBe("Imported");
   expect(ui.node("drop").hasAttribute("disabled")).toBe(false);
+});
+it("replaces imported edits only when explicitly selected", async () => {
+  const ui = panel();
+  await ui.parsed(await ui.add());
+  ui.node("replace-edits").checked = true;
+  ui.node("import").click();
+  await ui.flush();
+  expect(ui.imports()[0].options.conflict).toBe("replace-imported");
+  expect(ui.node("reimport-options").hasAttribute("disabled")).toBe(true);
 });
 it("warns about missing fonts and waits for explicit approval before making native changes", async () => {
   const ui = panel({ fonts: [{ family: "Inter", style: "Regular" }] });
@@ -424,6 +439,123 @@ it("cancels the active request and does not start the next batch file", async ()
   expect(ui.imports()).toHaveLength(1);
   expect(ui.node("cancel").hidden).toBe(true);
   expect(ui.node("status").textContent).toContain("Cancelled");
+});
+
+it("streams images before starting conversion, supports cancelling the transfer and retries from intact queue data", async () => {
+  const ui = panel(),
+    file = structuredClone(shapes);
+  file.assets = [
+    {
+      path: "images/photo.png",
+      bytes: new Uint8Array(ASSET_CHUNK_BYTES + 19).fill(7),
+    },
+  ];
+  await ui.parsed(await ui.add(), file);
+  ui.node("import").click();
+  await ui.flush();
+  const start = ui.posts[ui.posts.length - 1];
+  expect(start.type).toBe("asset-transfer-start");
+  expect(start.file.assets[0].bytes.length).toBe(0);
+  expect(ui.imports()).toHaveLength(0);
+  expect(ui.node("status").textContent).toBe("Sending assets · 0%");
+  ui.node("cancel").click();
+  await ui.flush();
+  expect(ui.node("status").textContent).toBe("Cancelled");
+  expect(ui.node("import").hasAttribute("disabled")).toBe(false);
+  ui.node("import").click();
+  await ui.flush();
+  const retry = ui.posts[ui.posts.length - 1];
+  expect(retry.requestId).not.toBe(start.requestId);
+  ui.receive({
+    type: "asset-transfer-ack",
+    requestId: start.requestId,
+    sequence: 0,
+  });
+  await ui.flush();
+  expect(ui.posts[ui.posts.length - 1]).toBe(retry);
+  for (const sequence of [0, 1, 2]) {
+    ui.receive({
+      type: "asset-transfer-ack",
+      requestId: retry.requestId,
+      sequence,
+    });
+    await ui.flush();
+  }
+  const chunks = ui.posts.filter((m) => m.type === "asset-transfer-chunk");
+  expect(chunks.map((m) => m.bytes.length)).toEqual([ASSET_CHUNK_BYTES, 19]);
+  expect(chunks.every((m) => m.bytes.every((byte: number) => byte === 7))).toBe(
+    true,
+  );
+  expect(ui.imports()).toHaveLength(1);
+  expect(ui.imports()[0].transferred).toBe(true);
+  expect(ui.imports()[0].file).toBeUndefined();
+  ui.receive({
+    type: "report",
+    requestId: retry.requestId,
+    report: {
+      state: "complete",
+      totals: { Partial: 0, Unsupported: 0 },
+      validations: [],
+      findings: [],
+    },
+  });
+  await ui.flush();
+  expect(ui.node("status").textContent).toBe("Imported");
+});
+
+it("shows native transfer errors and does not leave the panel locked or start conversion", async () => {
+  const ui = panel(),
+    file = structuredClone(shapes);
+  file.assets = [{ path: "images/photo.png", bytes: new Uint8Array([1]) }];
+  await ui.parsed(await ui.add(), file);
+  ui.node("import").click();
+  await ui.flush();
+  const start = ui.posts[ui.posts.length - 1];
+  ui.receive({
+    type: "error",
+    requestId: start.requestId,
+    message: "Asset transfer interrupted.",
+  });
+  await ui.flush();
+  expect(ui.node("status").textContent).toBe("Asset transfer interrupted.");
+  expect(ui.node("import").hasAttribute("disabled")).toBe(false);
+  expect(ui.imports()).toHaveLength(0);
+  expect(ui.node("queue").children).toHaveLength(1);
+});
+
+it("displays finishing stages and ignores malformed or stale stage updates", async () => {
+  const ui = panel();
+  await ui.parsed(await ui.add());
+  ui.node("import").click();
+  await ui.flush();
+  const requestId = ui.imports()[0].requestId;
+  ui.receive({
+    type: "progress",
+    requestId,
+    done: 7645,
+    phase: "Linking Symbol text styles · 32/7645",
+  });
+  expect(ui.node("status").textContent).toBe(
+    "Linking Symbol text styles · 32/7645",
+  );
+  ui.receive({
+    type: "progress",
+    requestId: "stale",
+    done: 7645,
+    phase: "Old stage",
+  });
+  ui.receive({ type: "progress", requestId, done: 7645, phase: {} });
+  expect(ui.node("status").textContent).toBe(
+    "Linking Symbol text styles · 32/7645",
+  );
+  ui.node("cancel").click();
+  ui.receive({
+    type: "progress",
+    requestId,
+    done: 7645,
+    phase: "Checking resources",
+  });
+  expect(ui.node("status").textContent).toBe("Cancelling…");
 });
 
 it("uses the latest selected source revision for incremental imports, regardless of worker reply order", async () => {

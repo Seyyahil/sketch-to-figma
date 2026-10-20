@@ -2,6 +2,12 @@ import { applyTiledBitmap } from "./tiled-images";
 import { clamp, finite, gradientTransform } from "../core/math";
 import { sourceId, type Sketch } from "../core/types";
 import type { ImportContext } from "./context";
+import {
+  symbolBackground,
+  usesLegacyBackground,
+  usesStyleFills,
+} from "./symbol-background";
+import { leaves } from "../core/audit";
 /** Combined geometry owns its paint on the operative child, not its source wrapper. */
 export function appearanceNode(source: Sketch, node: SceneNode): SceneNode {
   if (source.hasClippingMask && source.clippingMaskMode === 0 && node.parent) {
@@ -262,9 +268,25 @@ export async function imageHash(
   const key = ref._ref ?? ref.sha1?._data;
   const existing = ctx.imageHashes.get(key);
   if (existing) return existing;
-  let bytes = ctx.file.assets.find(
+  const asset = ctx.file.assets.find(
     (a) => a.path === ref._ref || a.path.startsWith(`${ref._ref}.`),
-  )?.bytes;
+  );
+  if (asset?.imageHash) {
+    ctx.imageHashes.set(key, asset.imageHash);
+    ctx.index.assets[key] = asset.imageHash;
+    return asset.imageHash;
+  }
+  if (asset?.imageError) {
+    ctx.finding(
+      "IMAGE_FORMAT",
+      `Asset ${key}: ${asset.imageError}`,
+      undefined,
+      undefined,
+      "error",
+    );
+    return undefined;
+  }
+  let bytes = asset?.bytes.length ? asset.bytes : undefined;
   if (!bytes && ref.data?._data) {
     const chars =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -430,10 +452,19 @@ export async function applyAppearance(
 ): Promise<void> {
   const st = s.style ?? {},
     l = ctx.ledger(s);
+  const styleFills = usesStyleFills(s) ? (st.fills ?? []) : [];
+  if (!usesStyleFills(s)) {
+    for (const path of leaves(st.fills ?? [], "/style/fills"))
+      l.mark(
+        path,
+        "Editable Equivalent",
+        "Dormant Symbol background retained in source metadata, excluded from component content as in Sketch instances.",
+      );
+  }
   if ("fills" in node && (node.type !== "INSTANCE" || st.fills?.length)) {
     const checkpoint = l.checkpoint();
     const paints: Paint[] = [];
-    for (const [i, f] of (st.fills ?? []).entries())
+    for (const [i, f] of styleFills.entries())
       try {
         const p = await paint(
           ctx,
@@ -575,17 +606,22 @@ export async function applyAppearance(
     "Partial",
     "Original style identity retained as metadata; compatible bindings applied separately.",
   );
-  if (
-    (s._class === "artboard" || s._class === "symbolMaster") &&
-    s.hasBackgroundColor &&
-    "fills" in node
-  ) {
+  if (usesLegacyBackground(s) && "fills" in node) {
     node.fills = [
       solidPaint(ctx, s, s.backgroundColor, "/backgroundColor"),
       ...(typeof node.fills === "symbol" ? [] : node.fills),
     ];
     l.mark("/hasBackgroundColor");
     l.color("/backgroundColor");
+  }
+  if (s._class === "symbolMaster") {
+    l.fields("", ["groupBehavior", "includeBackgroundColorInInstance"]);
+    if (symbolBackground(s) !== "legacy")
+      l.mark(
+        "/hasBackgroundColor",
+        "Editable Equivalent",
+        "Legacy canvas background flag does not add a fill to modern Symbol content or backgrounds excluded from instances.",
+      );
   }
   if (s._class === "bitmap" && s.image && "fills" in node) {
     if (await applyTiledBitmap(ctx, s, node)) return;

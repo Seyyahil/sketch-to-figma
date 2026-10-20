@@ -59,6 +59,32 @@ const simple = (): SketchFile => ({
   ],
 });
 describe("import orchestration", () => {
+  it("retains conversion failures on unchanged reimport and clears them after source repair", async () => {
+    const host = createHost();
+    const file = simple();
+    const color = file.pages[0].layers[0].layers[0].style.fills[0].color;
+    color.swatchID = "MISSING-SWATCH";
+    const first = await startImport(host.api, file, options).result;
+    const original = first.findings.filter(
+      (f) => f.code === "VARIABLE_REFERENCE",
+    );
+    expect(original).toHaveLength(1);
+    const repeated = await startImport(host.api, file, options).result;
+    expect(repeated.created).toBe(0);
+    expect(repeated.updated).toBe(0);
+    expect(
+      repeated.findings.filter((f) => f.code === "VARIABLE_REFERENCE"),
+    ).toEqual(original);
+    const again = await startImport(host.api, file, options).result;
+    expect(
+      again.findings.filter((f) => f.code === "VARIABLE_REFERENCE"),
+    ).toEqual(original);
+    delete color.swatchID;
+    const repaired = await startImport(host.api, file, options).result;
+    expect(
+      repaired.findings.filter((f) => f.code === "VARIABLE_REFERENCE"),
+    ).toEqual([]);
+  });
   it("reuses IDs and resource counts on repeated import", async () => {
     const h = createHost(),
       f = bindingFixture();
@@ -119,6 +145,25 @@ describe("import orchestration", () => {
     }).result;
     expect(replaced.state).toBe("complete");
     expect(h.nodes.get(first.nodes.R.nodeId).name).toBe("Source change");
+  });
+  it("records fingerprints after committed helper cleanup so an unchanged reimport is not treated as locally edited", async () => {
+    const h = createHost(),
+      f = simple();
+    await startImport(h.api, f, options).result;
+    const parent = h.nodes.get(readIndex(h.api, "DOC").nodes.A.nodeId);
+    const obsolete = h.api.createFrame();
+    obsolete.setPluginData("sketch2figma:wrapper", "mask");
+    obsolete.setPluginData("sketch2figma:documentId", "DOC");
+    parent.appendChild(obsolete);
+    await startImport(h.api, f, { ...options, conflict: "replace-imported" })
+      .result;
+    expect(obsolete.removed).toBe(true);
+    const index = readIndex(h.api, "DOC");
+    const repeated = await startImport(h.api, f, options).result;
+    expect(repeated.created).toBe(0);
+    expect(repeated.updated).toBe(0);
+    expect(repeated.preserved).toBe(0);
+    expect(readIndex(h.api, "DOC")).toEqual(index);
   });
   it("cancels a fresh import and removes created content/resources", async () => {
     const h = createHost(),

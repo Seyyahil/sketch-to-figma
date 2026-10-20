@@ -18,6 +18,60 @@ type Plan =
     };
 const close = (a: number, b: number) => Math.abs(a - b) <= 1e-6;
 
+/** A legacy background + auto-width label + fixed trailing Symbol is not flex flow. */
+export function smartLayoutAffixPlan(
+  source: Sketch,
+): { label: Sketch; affix: Sketch } | undefined {
+  if (source.groupLayout?.axis !== 0 || source.groupLayout?.layoutAnchor !== 0)
+    return;
+  const children: Sketch[] = (source.layers ?? []).filter(
+    (child: Sketch) => child.isVisible !== false,
+  );
+  if (children.length !== 3) return;
+  const [background, label, affix] = children;
+  const frame = source.frame;
+  if (
+    !frame ||
+    background._class !== "rectangle" ||
+    label._class !== "text" ||
+    (label.textBehaviour ?? 0) !== 0 ||
+    affix._class !== "symbolInstance" ||
+    children.some(
+      (child) =>
+        !child.frame ||
+        child.rotation ||
+        child.isFlippedHorizontal ||
+        child.isFlippedVertical ||
+        child.hasClippingMask ||
+        child.flexItem?.ignoreLayout ||
+        child.bridge?.ignoresStackLayout,
+    )
+  )
+    return;
+  const b = background.frame,
+    l = label.frame,
+    a = affix.frame;
+  if (
+    !close(b.x, 0) ||
+    !close(b.y, 0) ||
+    !close(b.width, frame.width) ||
+    !close(b.height, frame.height) ||
+    ![l, a].every(
+      (f) =>
+        [f.x, f.y, f.width, f.height].every(Number.isFinite) &&
+        f.width > 0 &&
+        f.height > 0 &&
+        f.x >= 0 &&
+        f.y >= 0 &&
+        f.x + f.width <= frame.width &&
+        f.y + f.height <= frame.height,
+    ) ||
+    l.x + l.width > a.x
+  )
+    return;
+  return { label, affix };
+}
+
 /** Legacy Smart Layout is a resize rule, not a declaration of flex-flow order. */
 export function smartLayoutPlan(source: Sketch): Plan {
   const gl = source.groupLayout;
@@ -161,7 +215,39 @@ export async function applySmartLayout(
       };
   }
   if ("reason" in plan) {
-    const reason = `${plan.reason} Editable source geometry, paint order and constraints retained; legacy responsive behavior is not reproduced.`;
+    const affixPlan = smartLayoutAffixPlan(source);
+    let affixMapped = false;
+    if (affixPlan) {
+      const label = ctx.nodes.get(sourceId(affixPlan.label));
+      const affix = ctx.nodes.get(sourceId(affixPlan.affix));
+      if (
+        label?.parent?.id === node.id &&
+        affix?.parent?.id === node.id &&
+        affix.type === "INSTANCE" &&
+        "constraints" in label &&
+        "constraints" in affix
+      ) {
+        await ctx.journal.before(label);
+        await ctx.journal.before(affix);
+        affixMapped = await ctx.attempt(source, "/groupLayout", () => {
+          label.constraints = { horizontal: "MIN", vertical: "CENTER" };
+          affix.constraints = { horizontal: "MAX", vertical: "CENTER" };
+        });
+        if (affixMapped)
+          ctx.finding(
+            "SMART_LAYOUT_AFFIX",
+            "Legacy auto-width label and trailing Symbol retain their left/right insets and fixed icon dimensions when an instance resizes. Source frames and background constraints remain intact.",
+            source,
+            "/groupLayout",
+            "info",
+          );
+      }
+    }
+    const reason = `${plan.reason} Editable source geometry and paint order retained; ${
+      affixMapped
+        ? "label and trailing Symbol insets use native resize constraints. Other legacy responsive behavior is not reproduced."
+        : "source constraints retained. Legacy responsive behavior is not reproduced."
+    }`;
     await ctx.attempt(
       source,
       "/groupLayout",

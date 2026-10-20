@@ -61,6 +61,16 @@ export interface NodeSnapshot {
   index: number;
   plugin: Record<string, string>;
   children?: NodeSnapshot[];
+  childOrder?: string[];
+}
+/** Use only within one immutable read pass; clear before mutating any scene node. */
+export class FingerprintPass {
+  readonly snapshots = new Map<string, NodeSnapshot>();
+  readonly links = new Map<string, Record<string, string | null>>();
+  clear() {
+    this.snapshots.clear();
+    this.links.clear();
+  }
 }
 const SCENE_FIELDS = [
   "name",
@@ -147,7 +157,10 @@ export function capture(
   recursive = false,
   includePlugin = true,
   skipObsolete = false,
+  cache?: Map<string, NodeSnapshot>,
 ): NodeSnapshot {
+  const prior = cache?.get(node.id);
+  if (prior) return prior;
   const props: Sketch = { type: node.type };
   props.variableBindings = Object.fromEntries(
     Object.entries(node.boundVariables ?? {}).filter(
@@ -187,30 +200,36 @@ export function capture(
         node.getPluginDataKeys().map((k) => [k, node.getPluginData(k)]),
       )
     : {};
-  return {
+  const result: NodeSnapshot = {
     props,
     parentId: node.parent?.id ?? null,
     index:
       node.parent && "children" in node.parent
-        ? (node.parent.children as readonly BaseNode[]).indexOf(node)
+        ? node.parent.children.findIndex((child) => child.id === node.id)
         : 0,
     plugin,
+    ...("children" in node && node.type !== "INSTANCE"
+      ? { childOrder: node.children.map((child) => child.id) }
+      : {}),
     ...(recursive && "children" in node
       ? {
           children: node.children
             .filter(
               (c) => !skipObsolete || !c.getPluginData("sketch2figma:obsolete"),
             )
-            .map((c) => capture(c, true, includePlugin, skipObsolete)),
+            .map((c) => capture(c, true, includePlugin, skipObsolete, cache)),
         }
       : {}),
   };
+  cache?.set(node.id, result);
+  return result;
 }
 export async function targetFingerprint(
   node: SceneNode,
   version: 1 | 2 = 2,
+  pass?: FingerprintPass,
 ): Promise<string> {
-  const snap = capture(node, true, false, true);
+  const snap = capture(node, true, false, true, pass?.snapshots);
   const clean = (s: NodeSnapshot): unknown => ({
     props:
       version === 1
@@ -222,13 +241,20 @@ export async function targetFingerprint(
         : s.props,
     children: s.children?.map(clean),
   });
-  const links: Record<string, string | null> = {};
-  const visit = async (n: SceneNode) => {
+  const visit = async (
+    n: SceneNode,
+  ): Promise<Record<string, string | null>> => {
+    const prior = pass?.links.get(n.id);
+    if (prior) return prior;
+    const links: Record<string, string | null> = {};
     if (n.type === "INSTANCE")
       links[n.id] = (await n.getMainComponentAsync())?.id ?? null;
-    if ("children" in n) for (const child of n.children) await visit(child);
+    if ("children" in n)
+      for (const child of n.children) Object.assign(links, await visit(child));
+    pass?.links.set(n.id, links);
+    return links;
   };
-  await visit(node);
+  const links = await visit(node);
   return fingerprint({
     componentLinks: links,
     parentId: snap.parentId,
@@ -242,12 +268,46 @@ export async function targetFingerprint(
         : undefined,
   });
 }
+function insideInstance(node: BaseNode): boolean {
+  for (let parent = node.parent; parent; parent = parent.parent)
+    if (parent.type === "INSTANCE") return true;
+  return false;
+}
+function inheritedStructure(key: string): boolean {
+  return (
+    key.startsWith("layout") ||
+    key.startsWith("primaryAxis") ||
+    key.startsWith("counterAxis") ||
+    key.startsWith("padding") ||
+    [
+      "relativeTransform",
+      "constraints",
+      "vectorPaths",
+      "vectorNetwork",
+      "booleanOperation",
+      "isMask",
+      "maskType",
+      "clipsContent",
+      "itemSpacing",
+      "itemReverseZIndex",
+      "strokesIncludedInLayout",
+      "minWidth",
+      "maxWidth",
+      "minHeight",
+      "maxHeight",
+      "numberOfFixedChildren",
+      "textAutoResize",
+    ].includes(key)
+  );
+}
+
 export async function restore(
   api: PluginAPI,
   node: SceneNode,
   snapshot: NodeSnapshot,
 ): Promise<void> {
-  const p = snapshot.props;
+  const p = snapshot.props,
+    inherited = insideInstance(node);
   if (node.type === "INSTANCE" && p.mainComponentId) {
     const master = await api.getNodeByIdAsync(p.mainComponentId);
     if (master?.type !== "COMPONENT")
@@ -264,14 +324,46 @@ export async function restore(
   const parent = snapshot.parentId
     ? await api.getNodeByIdAsync(snapshot.parentId)
     : null;
-  if (parent && parent.type !== "DOCUMENT" && "insertChild" in parent)
+  if (
+    parent &&
+    parent.type !== "DOCUMENT" &&
+    "insertChild" in parent &&
+    !inherited &&
+    (node.parent?.id !== parent.id ||
+      parent.children.findIndex((child) => child.id === node.id) !==
+        snapshot.index)
+  )
     parent.insertChild(Math.min(snapshot.index, parent.children.length), node);
-  if ("resize" in node && p.width > 0 && p.height > 0)
+  if (
+    "resize" in node &&
+    !inherited &&
+    p.width > 0 &&
+    p.height > 0 &&
+    (node.width !== p.width || node.height !== p.height)
+  )
     node.resize(p.width, p.height);
-  if (node.type === "VECTOR" && p.vectorNetwork)
+  // Restore flow before fields whose setters require Auto Layout. Freeform
+  // containers expose default values for some of these fields but reject writes.
+  if (
+    "layoutMode" in node &&
+    !inherited &&
+    p.layoutMode !== undefined &&
+    node.layoutMode !== p.layoutMode
+  )
+    node.layoutMode = p.layoutMode;
+  if (
+    node.type === "VECTOR" &&
+    p.vectorNetwork &&
+    !inherited &&
+    !sameValue(node.vectorNetwork, p.vectorNetwork)
+  )
     await node.setVectorNetworkAsync(p.vectorNetwork);
   const restorationErrors: string[] = [];
   for (const [key, value] of Object.entries(p)) {
+    // Instance descendant geometry and flow belong to the restored master.
+    // A snapshot taken after a master mutation can contain its propagated
+    // geometry, which must not be turned into forbidden instance overrides.
+    if (inherited && inheritedStructure(key)) continue;
     if (
       [
         "type",
@@ -291,7 +383,7 @@ export async function restore(
       continue;
     if (key === "vectorPaths" && node.type === "VECTOR" && p.vectorNetwork)
       continue;
-    if (key in node)
+    if (key in node && !sameValue((node as unknown as Sketch)[key], value))
       try {
         (node as unknown as Sketch)[key] = value;
       } catch (e) {
@@ -409,6 +501,7 @@ export interface PageSnapshot {
   backgrounds: readonly Paint[];
   flowStartingPoints: readonly { nodeId: string; name: string }[];
   plugin: Record<string, string>;
+  childOrder?: string[];
 }
 export interface JournalData {
   documentId: string;
@@ -420,8 +513,90 @@ export interface JournalData {
   resourceSnapshots?: ResourceSnapshot[];
   pages?: Record<string, PageSnapshot>;
 }
+interface JournalHeader {
+  storageVersion: 2;
+  documentId: string;
+  entries: number;
+}
+type JournalEntry =
+  | { kind: "created"; id: string }
+  | { kind: "resource"; value: JournalData["resources"][number] }
+  | { kind: "snapshot"; id: string; value: NodeSnapshot }
+  | { kind: "page"; id: string; value: PageSnapshot }
+  | { kind: "resourceSnapshot"; value: ResourceSnapshot };
+
+function clearJournalEntries(root: PluginDataMixin): void {
+  for (const key of root.getPluginDataKeys())
+    if (
+      key.startsWith(`${NS}:journal-entry:`) ||
+      key.startsWith(`${NS}:journal-index:`)
+    )
+      root.setPluginData(key, "");
+}
+
+/** Read both legacy whole-document journals and incremental recovery records. */
+export function readJournal(api: Pick<PluginAPI, "root">): JournalData | null {
+  const stored = readData<JournalData | JournalHeader | null>(
+    api.root,
+    "journal",
+    null,
+  );
+  if (!stored || !("storageVersion" in stored)) return stored;
+  if (
+    stored.storageVersion !== 2 ||
+    !Number.isSafeInteger(stored.entries) ||
+    stored.entries < 0
+  )
+    throw new Error("Corrupted recovery journal header.");
+  const previousIndex = readData<ImportIndex | null>(
+    api.root,
+    "journal-index",
+    null,
+  );
+  if (!previousIndex || previousIndex.documentId !== stored.documentId)
+    throw new Error("Corrupted recovery journal index.");
+  const data: JournalData = {
+    documentId: stored.documentId,
+    state: "running",
+    created: [],
+    resources: [],
+    snapshots: {},
+    pages: {},
+    resourceSnapshots: [],
+    previousIndex,
+  };
+  for (let i = 0; i < stored.entries; i++) {
+    const entry = readData<JournalEntry | null>(
+      api.root,
+      `journal-entry:${i}`,
+      null,
+    );
+    if (!entry) throw new Error(`Missing recovery journal entry ${i}.`);
+    switch (entry.kind) {
+      case "created":
+        data.created.push(entry.id);
+        break;
+      case "resource":
+        data.resources.push(entry.value);
+        break;
+      case "snapshot":
+        data.snapshots[entry.id] = entry.value;
+        break;
+      case "page":
+        data.pages![entry.id] = entry.value;
+        break;
+      case "resourceSnapshot":
+        data.resourceSnapshots!.push(entry.value);
+        break;
+      default:
+        throw new Error(`Corrupted recovery journal entry ${i}.`);
+    }
+  }
+  return data;
+}
 export class Journal {
   data: JournalData;
+  private entries = 0;
   constructor(
     readonly api: PluginAPI,
     index: ImportIndex,
@@ -436,17 +611,30 @@ export class Journal {
       pages: {},
       previousIndex: JSON.parse(JSON.stringify(index)),
     };
-    this.save();
+    clearJournalEntries(api.root);
+    writeData(api.root, "journal-index", this.data.previousIndex);
+    this.saveHeader();
   }
-  save(): void {
-    writeData(this.api.root, "journal", this.data);
+  private saveHeader(): void {
+    writeData(this.api.root, "journal", {
+      storageVersion: 2,
+      documentId: this.data.documentId,
+      entries: this.entries,
+    } satisfies JournalHeader);
+  }
+  private append(entry: JournalEntry): void {
+    // Persist this snapshot before its mutation, without rewriting every earlier
+    // snapshot (quadratic storage traffic on large reimports).
+    writeData(this.api.root, `journal-entry:${this.entries}`, entry);
+    this.entries++;
+    this.saveHeader();
   }
   track(node: BaseNode): void {
     this.data.created.push(node.id);
-    this.save();
+    this.append({ kind: "created", id: node.id });
   }
   trackResource(resource: BaseStyle | Variable | VariableCollection): void {
-    this.data.resources.push({
+    const value = {
       id: resource.id,
       type:
         "resolvedType" in resource
@@ -454,8 +642,9 @@ export class Journal {
           : "modes" in resource
             ? "COLLECTION"
             : "STYLE",
-    });
-    this.save();
+    };
+    this.data.resources.push(value);
+    this.append({ kind: "resource", value });
   }
   async before(node: SceneNode): Promise<void> {
     if (this.data.created.includes(node.id) || this.data.snapshots[node.id])
@@ -464,7 +653,7 @@ export class Journal {
     if (node.type === "INSTANCE")
       snapshot.props.mainComponentId = (await node.getMainComponentAsync())?.id;
     this.data.snapshots[node.id] = snapshot;
-    this.save();
+    this.append({ kind: "snapshot", id: node.id, value: snapshot });
   }
   beforePage(page: PageNode): void {
     if (this.data.created.includes(page.id) || this.data.pages?.[page.id])
@@ -475,11 +664,12 @@ export class Journal {
       guides: page.guides,
       backgrounds: page.backgrounds,
       flowStartingPoints: page.flowStartingPoints,
+      childOrder: page.children.map((child) => child.id),
       plugin: Object.fromEntries(
         page.getPluginDataKeys().map((k) => [k, page.getPluginData(k)]),
       ),
     };
-    this.save();
+    this.append({ kind: "page", id: page.id, value: this.data.pages[page.id] });
   }
   beforeResource(r: BaseStyle | Variable | VariableCollection): void {
     if (
@@ -512,7 +702,7 @@ export class Journal {
     for (const k of keys)
       props[k] = JSON.parse(JSON.stringify((r as unknown as Sketch)[k]));
     this.data.resourceSnapshots ??= [];
-    this.data.resourceSnapshots.push({
+    const value = {
       id: r.id,
       type:
         "valuesByMode" in r
@@ -521,11 +711,13 @@ export class Journal {
             ? "COLLECTION"
             : "STYLE",
       props,
-    });
-    this.save();
+    };
+    this.data.resourceSnapshots.push(value);
+    this.append({ kind: "resourceSnapshot", value });
   }
   commit(): void {
     writeData(this.api.root, "journal", null);
+    clearJournalEntries(this.api.root);
   }
   async rollback(): Promise<string[]> {
     return recover(this.api, this.data);
@@ -546,7 +738,10 @@ export async function recover(
         "visible" in n &&
         p &&
         p.type !== "DOCUMENT" &&
-        "insertChild" in p
+        "insertChild" in p &&
+        !insideInstance(n) &&
+        (n.parent?.id !== p.id ||
+          p.children.findIndex((child) => child.id === n.id) !== s.index)
       )
         p.insertChild(Math.min(s.index, p.children.length), n as SceneNode);
     } catch (e) {
@@ -583,6 +778,33 @@ export async function recover(
     } catch (e) {
       errors.push(`Page ${id}: ${e}`);
     }
+  // Earlier moves change later siblings' captured indices. The parent's original
+  // order is authoritative and must be restored after all node relocations.
+  for (const [id, snapshot] of [
+    ...Object.entries(data.snapshots),
+    ...Object.entries(data.pages ?? {}),
+  ]) {
+    if (!snapshot.childOrder) continue;
+    try {
+      const parent = await api.getNodeByIdAsync(id);
+      if (
+        !parent ||
+        !("children" in parent) ||
+        parent.type === "DOCUMENT" ||
+        parent.type === "INSTANCE" ||
+        insideInstance(parent)
+      )
+        continue;
+      for (const [index, childId] of snapshot.childOrder.entries()) {
+        const child = parent.children.find((node) => node.id === childId);
+        if (!child) throw new Error(`Original child ${childId} is missing`);
+        if (parent.children[index]?.id !== childId)
+          parent.insertChild(index, child);
+      }
+    } catch (error) {
+      errors.push(`Restore order ${id}: ${error}`);
+    }
+  }
   for (const s of [...(data.resourceSnapshots ?? [])].reverse())
     try {
       const r =
@@ -627,18 +849,20 @@ export async function recover(
     data.state = "recovery-needed";
     writeData(api.root, "journal", data);
   } else writeData(api.root, "journal", null);
+  clearJournalEntries(api.root);
   return errors;
 }
 export async function mapping(
   node: SceneNode,
   s: Sketch,
   conversionHash: string,
+  pass?: FingerprintPass,
 ): Promise<StoredMapping> {
   return {
     nodeId: node.id,
     sourceHash: fingerprint(s),
     conversionHash,
-    targetHash: await targetFingerprint(node),
+    targetHash: await targetFingerprint(node, 2, pass),
     targetHashVersion: 2,
     type: node.type,
   };

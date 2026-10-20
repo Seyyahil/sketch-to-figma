@@ -6,7 +6,10 @@ import {
   type Sketch,
   type SketchFile,
 } from "../src/core/types";
-import { smartLayoutPlan } from "../src/figma/smart-layout";
+import {
+  smartLayoutAffixPlan,
+  smartLayoutPlan,
+} from "../src/figma/smart-layout";
 import { startImport } from "../src/figma/importer";
 import { mapping, readData, readIndex, writeData } from "../src/figma/storage";
 import { createHost } from "./mock-figma";
@@ -60,6 +63,92 @@ const options = {
   ...DEFAULT_OPTIONS,
   fallbackFont: { family: "Inter", style: "Regular" },
 };
+
+it("keeps legacy label and trailing-icon insets when a wider instance overrides its label", async () => {
+  const background = rectangle("BG", 0, 0, 212, 56);
+  const label: Sketch = {
+    _class: "text",
+    do_objectID: "LABEL",
+    name: "Label",
+    frame: { x: 32.5, y: 11, width: 110, height: 28 },
+    resizingConstraint: 45,
+    attributedString: { string: "Button label", attributes: [] },
+  };
+  const affix: Sketch = {
+    _class: "symbolInstance",
+    do_objectID: "AFFIX",
+    symbolID: "ICON",
+    name: "Trailing icon",
+    resizingConstraint: 63,
+    frame: { x: 152, y: 14, width: 28, height: 28 },
+  };
+  const button: Sketch = {
+    ...group([background, label, affix], 0),
+    _class: "symbolMaster",
+    symbolID: "BUTTON",
+    frame: { x: 0, y: 0, width: 212, height: 56 },
+  };
+  const file = archive(button);
+  file.pages[0].layers.unshift({
+    _class: "symbolMaster",
+    do_objectID: "ICON_MASTER",
+    symbolID: "ICON",
+    name: "Icon",
+    frame: { x: 300, y: 0, width: 28, height: 28 },
+    layers: [rectangle("ICON_SHAPE", 0, 0, 28, 28)],
+  });
+  const host = createHost();
+  await startImport(host.api, file, options).result;
+  const text = target(host, file, "LABEL"),
+    icon = target(host, file, "AFFIX");
+  expect(text.constraints).toEqual({ horizontal: "MIN", vertical: "CENTER" });
+  expect(icon.constraints).toEqual({ horizontal: "MAX", vertical: "CENTER" });
+  expect([text.x, text.y, icon.x, icon.y, icon.width, icon.height]).toEqual([
+    32.5, 11, 152, 14, 28, 28,
+  ]);
+  // Independent native constraint calculation for the supplied instance size:
+  // a fixed right inset moves the icon by the parent's 75px width increase;
+  // an auto-width label grows to 182px without moving its left inset.
+  const resized = {
+    labelLeft: text.x,
+    labelRight: text.x + 182,
+    iconLeft: 287 - (212 - icon.x),
+  };
+  expect(resized).toEqual({
+    labelLeft: 32.5,
+    labelRight: 214.5,
+    iconLeft: 227,
+  });
+  expect(resized.labelRight).toBeLessThan(resized.iconLeft);
+  expect(target(host, file, "GROUP").layoutMode).toBe("NONE");
+  expect(readData<Sketch>(text, "source", {}).resizingConstraint).toBe(45);
+  const second = await startImport(host.api, file, options).result;
+  expect(second.updated).toBe(0);
+  expect(target(host, file, "AFFIX").id).toBe(icon.id);
+
+  expect(
+    smartLayoutAffixPlan({
+      ...button,
+      groupLayout: { ...button.groupLayout, layoutAnchor: 1 },
+    }),
+  ).toBeUndefined();
+  expect(
+    smartLayoutAffixPlan({
+      ...button,
+      layers: [background, { ...label, textBehaviour: 2 }, affix],
+    }),
+  ).toBeUndefined();
+  expect(
+    smartLayoutAffixPlan({
+      ...button,
+      layers: [
+        background,
+        label,
+        { ...affix, frame: { ...affix.frame, x: 90 } },
+      ],
+    }),
+  ).toBeUndefined();
+});
 
 function target(
   host: ReturnType<typeof createHost>,

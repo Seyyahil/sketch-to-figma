@@ -104,6 +104,8 @@ export function createHost({
     runs: any[] = [];
     main: any;
     constructor(public type: string) {
+      if (type === "FRAME" || type === "COMPONENT")
+        this.fills = [{ type: "SOLID", color: { r: 1, g: 1, b: 1 } }];
       nodes.set(this.id, this);
     }
     get x() {
@@ -277,6 +279,7 @@ export function createHost({
     }
     removeOverrides() {
       if (this.main) {
+        this.fills = structuredClone(this.main.fills);
         // Observed native behavior: instance-root plugin data returns to the
         // main component's values. Importer identity must be stamped afterward.
         this.data = { ...this.main.data };

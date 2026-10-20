@@ -1,6 +1,7 @@
 import { renderReport } from "./report-view";
 import { focusedReport } from "./report-model";
-import { prepareAssets, nativePayload } from "./asset-preparation";
+import { prepareAssets } from "./asset-preparation";
+import { AssetTransfer, TRANSFER_CANCELLED } from "./asset-transfer";
 import { readPluginMessage, type ImportSummary } from "./plugin-messages";
 import { parseSketch } from "../sketch/archive";
 import { importFontNames } from "../core/resource-selection";
@@ -77,6 +78,7 @@ let worker: Worker | undefined;
 const requestId = () => `${Date.now()}-${++serial}`;
 const post = (message: unknown) =>
   parent.postMessage({ pluginMessage: message }, "*");
+const assetTransfer = new AssetTransfer(post);
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 function status(text: string, error = false) {
@@ -179,6 +181,7 @@ function render() {
   $("drop").toggleAttribute("disabled", locked());
   $("files").toggleAttribute("disabled", locked());
   $("resources").toggleAttribute("disabled", locked());
+  $("reimport-options").toggleAttribute("disabled", locked());
   $("import").toggleAttribute(
     "disabled",
     locked() ||
@@ -338,6 +341,9 @@ async function importBatch() {
   const input = [...queue],
     options: ImportOptions = {
       ...DEFAULT_OPTIONS,
+      conflict: $<HTMLInputElement>("replace-edits").checked
+        ? "replace-imported"
+        : "preserve-local",
       resourceTypes: Object.fromEntries(
         kinds.map((kind) => [kind, $<HTMLInputElement>(kind).checked]),
       ),
@@ -405,13 +411,27 @@ async function runBatch(input: QueueItem[], options: ImportOptions) {
           : `Importing ${item.source.name}…`,
       );
       $("progress").removeAttribute("value");
+      if (item.file!.assets.length) {
+        await assetTransfer.send(item.file!, id, (sent, total) => {
+          status(
+            `Sending assets · ${total ? Math.round((sent / total) * 100) : 100}%`,
+          );
+          $<HTMLProgressElement>("progress").max = Math.max(total, 1);
+          $<HTMLProgressElement>("progress").value = sent;
+        });
+        if (cancelled) break;
+        $("progress").removeAttribute("value");
+        status(`Importing ${item.source.name}…`);
+      }
       const result = new Promise<ImportSummary>((resolve, reject) =>
         pending.set(id, { resolve, reject }),
       );
       post({
         type: "import",
         requestId: id,
-        file: nativePayload(item.file!),
+        ...(item.file!.assets.length
+          ? { transferred: true }
+          : { file: item.file! }),
         options,
       });
       const report = await result;
@@ -428,8 +448,14 @@ async function runBatch(input: QueueItem[], options: ImportOptions) {
       summaries.push("Cancelled");
     status(summaries.join("\n"), issues);
   } catch (error) {
-    status(message(error), true);
+    if (currentRequest) {
+      try {
+        post({ type: "asset-transfer-abort", requestId: currentRequest });
+      } catch {}
+    }
+    status(message(error), error !== TRANSFER_CANCELLED);
   } finally {
+    if (currentRequest) pending.delete(currentRequest);
     running = false;
     currentRequest = undefined;
     render();
@@ -486,6 +512,7 @@ $("cancel").onclick = () => {
   }
   if (!running) return;
   cancelled = true;
+  assetTransfer.cancel();
   post({ type: "cancel" });
   status("Cancelling…");
   render();
@@ -493,6 +520,8 @@ $("cancel").onclick = () => {
 window.onmessage = (event) => {
   const m = readPluginMessage(event.data);
   if (!m) return;
+  if (m.type === "asset-transfer-ack")
+    assetTransfer.acknowledge(m.requestId, m.sequence);
   if (m.type === "ready") {
     initialized = true;
     hasSavedReport = m.hasReport === true;
@@ -509,7 +538,7 @@ window.onmessage = (event) => {
     !cancelled &&
     m.requestId === currentRequest
   )
-    status(`Importing · ${m.done} layers`);
+    status(m.phase ?? `Importing · ${m.done} layers`);
   if (m.type === "report") {
     pending.get(m.requestId)?.resolve(m.report);
     pending.delete(m.requestId);
@@ -526,6 +555,7 @@ window.onmessage = (event) => {
     readingReport = false;
     render();
     if (m.requestId) {
+      assetTransfer.fail(m.requestId, new Error(m.message));
       fontRequests.get(m.requestId)?.reject(new Error(m.message));
       fontRequests.delete(m.requestId);
       pending.get(m.requestId)?.reject(new Error(m.message));

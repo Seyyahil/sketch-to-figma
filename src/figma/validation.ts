@@ -3,7 +3,13 @@ import { instanceTextSources } from "./instance-text-styles";
 import { validateDetails } from "./detail-validation";
 import { validateBooleanShape } from "./booleans";
 import { overrideTarget } from "./symbols";
+import { imageOverrideMatches } from "./tiled-images";
 import { appearanceNode } from "./appearance";
+import {
+  symbolBackground,
+  usesLegacyBackground,
+  usesStyleFills,
+} from "./symbol-background";
 import { fontTraitStyleNames, normalizeFont } from "./typography";
 import {
   auditGeometry,
@@ -23,7 +29,11 @@ export async function validateImport(
     all = walkLayers(ctx.file.pages).filter(
       (s) => scope.has(sourceId(s)) && s._class !== "page",
     );
-  for (const s of all) {
+  for (const [validationIndex, s] of all.entries()) {
+    if (validationIndex % 32 === 0)
+      await ctx.checkpoint(
+        `Checking layers · ${validationIndex}/${all.length}`,
+      );
     const id = sourceId(s),
       n = ctx.nodes.get(id);
     checks.push({
@@ -150,6 +160,21 @@ export async function validateImport(
       });
     }
     const appearance = appearanceNode(s, n);
+    if (symbolBackground(s) === "none") {
+      const transparent =
+        "fills" in appearance &&
+        typeof appearance.fills !== "symbol" &&
+        appearance.fills.length === 0;
+      checks.push({
+        kind: "symbol-background",
+        resource: "components",
+        sourceId: id,
+        passed: transparent,
+        expected: [],
+        actual: "fills" in appearance ? appearance.fills : null,
+        message: `${s.name}: Symbol wrapper ${transparent ? "preserves source transparency" : "has an unexpected background fill"}.`,
+      });
+    }
     if (s.sharedStyleID) {
       const id = s.sharedStyleID;
       for (const [resource, field] of [
@@ -302,10 +327,12 @@ function validateColorBindings(ctx: ImportContext, s: Sketch, n: SceneNode) {
     ["borders", "strokes"],
   ] as const) {
     if (!(field in n)) continue;
+    if (key === "fills" && !usesStyleFills(s)) continue;
     const paints = (n as unknown as Sketch)[field];
     if (typeof paints === "symbol") continue;
     for (const [i, fill] of (s.style?.[key] ?? []).entries()) {
-      const p = paints?.[i];
+      const p =
+        paints?.[i + (key === "fills" && usesLegacyBackground(s) ? 1 : 0)];
       if (fill.fillType === 0 || fill.fillType === undefined)
         check(
           fill.color,
@@ -328,6 +355,16 @@ function validateColorBindings(ctx: ImportContext, s: Sketch, n: SceneNode) {
             `${key}/${i}/gradient/${j}`,
           );
     }
+  }
+  if (usesLegacyBackground(s) && "fills" in n && typeof n.fills !== "symbol") {
+    const background = n.fills[0];
+    check(
+      s.backgroundColor,
+      background?.type === "SOLID"
+        ? background.boundVariables?.color
+        : undefined,
+      "backgroundColor",
+    );
   }
   if ("effects" in n) {
     let offset = 0;
@@ -387,6 +424,8 @@ async function validateOverrides(
     let passed: boolean | undefined;
     let observed: unknown;
     let hasObserved = false;
+    if (m[2] === "image")
+      passed = await imageOverrideMatches(ctx, target, o.value);
     if (m[2] === "textHAlign") {
       const expected = (
         {

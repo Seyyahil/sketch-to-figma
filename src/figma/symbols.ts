@@ -3,6 +3,7 @@ import { colorVariable, imageHash, solidPaint } from "./appearance";
 import { readData, writeData } from "./storage";
 import { applyFontTraits, loadCurrentFonts } from "./typography";
 import type { ImportContext } from "./context";
+import { applyTiledImageOverride } from "./tiled-images";
 /** Sketch paths contain nested Symbol IDs and the target ID, omitting ordinary groups. */
 export function overrideTarget(
   instance: InstanceNode,
@@ -213,6 +214,7 @@ export async function applyOverrides(
           } as SolidPaint;
           (target as unknown as Sketch)[field] = fills;
         } else if (kind === "image" && "fills" in target) {
+          if (await applyTiledImageOverride(ctx, target, o.value)) return;
           const hash = await imageHash(ctx, o.value);
           if (!hash) throw new Error("Missing override image");
           const fills = typeof target.fills === "symbol" ? [] : target.fills;

@@ -9,6 +9,148 @@ import { readData, readIndex } from "../src/figma/storage";
 import { alphaFixture } from "./alpha-fixture";
 import { preflight } from "../src/sketch/preflight";
 
+function tiledOverrideFixture() {
+  const file = bindingFixture();
+  file.document = { do_objectID: file.documentId };
+  const bitmap: Sketch = {
+    _class: "bitmap",
+    do_objectID: "PHOTO",
+    name: "Photo",
+    frame: { x: 0, y: 0, width: 200, height: 200 },
+    image: { _ref: "images/base.jpg" },
+  };
+  const master: Sketch = {
+    _class: "symbolMaster",
+    do_objectID: "MASTER",
+    symbolID: "S",
+    name: "Photo component",
+    frame: { x: 0, y: 0, width: 200, height: 200 },
+    layers: [bitmap],
+    includeBackgroundColorInInstance: false,
+  };
+  const instance: Sketch = {
+    _class: "symbolInstance",
+    do_objectID: "INSTANCE",
+    symbolID: "S",
+    name: "Overridden photo",
+    frame: { x: 250, y: 0, width: 200, height: 200 },
+    overrideValues: [
+      { overrideName: "PHOTO_image", value: { _ref: "images/override.jpg" } },
+    ],
+  };
+  file.pages[0].layers = [master, instance];
+  file.assets = ["base", "override"].flatMap((name) => [
+    {
+      path: `images/${name}.jpg`,
+      bytes: new Uint8Array(),
+      tiles: {
+        width: 5000,
+        height: 2000,
+        items: [
+          {
+            path: `images/${name}-0.png`,
+            x: 0,
+            y: 0,
+            width: 4096,
+            height: 2000,
+          },
+          {
+            path: `images/${name}-1.png`,
+            x: 4096,
+            y: 0,
+            width: 904,
+            height: 2000,
+          },
+        ],
+      },
+    },
+    {
+      path: `images/${name}-0.png`,
+      bytes: new Uint8Array(),
+      imageHash: `${name}-0`,
+    },
+    {
+      path: `images/${name}-1.png`,
+      bytes: new Uint8Array(),
+      imageHash: `${name}-1`,
+    },
+  ]);
+  return file;
+}
+
+it("overrides all native raster tiles in a linked instance while preserving crop geometry and the master", async () => {
+  const file = tiledOverrideFixture(),
+    h = createHost();
+  const report = await startImport(h.api, file).result;
+  expect(report.findings.filter((f) => f.severity === "error")).toEqual([]);
+  const index = readIndex(h.api, file.documentId);
+  const master = h.nodes.get(index.nodes.MASTER.nodeId);
+  const instance = h.nodes.get(index.nodes.INSTANCE.nodeId);
+  const tiles = instance.children[0].children;
+  expect(instance.main.id).toBe(master.id);
+  expect(tiles.map((n: any) => n.fills[0].imageHash)).toEqual([
+    "override-0",
+    "override-1",
+  ]);
+  expect(
+    master.children[0].children.map((n: any) => n.fills[0].imageHash),
+  ).toEqual(["base-0", "base-1"]);
+  for (let i = 0; i < tiles.length; i++) {
+    const original = master.children[0].children[i];
+    expect([
+      tiles[i].x,
+      tiles[i].y,
+      tiles[i].width,
+      tiles[i].height,
+      tiles[i].visible,
+      tiles[i].fills[0].imageTransform,
+    ]).toEqual([
+      original.x,
+      original.y,
+      original.width,
+      original.height,
+      original.visible,
+      original.fills[0].imageTransform,
+    ]);
+  }
+  expect(
+    report.validations.find((v) => v.kind === "component-override")?.passed,
+  ).toBe(true);
+  const second = await startImport(h.api, file).result;
+  expect(second.created).toBe(0);
+  expect(second.updated).toBe(0);
+  expect(
+    second.validations.find((v) => v.kind === "component-override")?.passed,
+  ).toBe(true);
+  tiles[0].fills = [{ ...tiles[0].fills[0], imageHash: "wrong" }];
+  const edited = await startImport(h.api, file).result;
+  expect(
+    edited.validations.find((v) => v.kind === "component-override")?.passed,
+  ).toBe(false);
+});
+
+it("reports incompatible tile grids without partially replacing the existing image", async () => {
+  const file = tiledOverrideFixture(),
+    h = createHost();
+  file.assets.find(
+    (a) => a.path === "images/override.jpg",
+  )!.tiles!.items[1].width = 900;
+  const report = await startImport(h.api, file).result;
+  const index = readIndex(h.api, file.documentId);
+  const instance = h.nodes.get(index.nodes.INSTANCE.nodeId);
+  expect(
+    instance.children[0].children.map((n: any) => n.fills[0].imageHash),
+  ).toEqual(["base-0", "base-1"]);
+  expect(
+    report.findings.some(
+      (f) => f.severity === "error" && /tile coverage/.test(f.message),
+    ),
+  ).toBe(true);
+  expect(
+    report.validations.find((v) => v.kind === "component-override")?.passed,
+  ).toBe(false);
+});
+
 it("reads PNG and JPEG dimensions without decoding full images", () => {
   const png = PNG.sync.write(new PNG({ width: 7, height: 5 }));
   expect(imageDimensions(png)).toEqual({ width: 7, height: 5 });
@@ -128,6 +270,7 @@ it("preserves full-resolution tile coverage and source asset identity without re
   await startImport(h.api, nativePayload(file), options).result;
   expect(target().children).toHaveLength(0);
   expect(target().fills[0].type).toBe("IMAGE");
+  expect(readData(target(), "imageTiles", null)).toBeNull();
 });
 
 it("reconstructs Sketch progressive opacity as an editable mask without covering the photo", async () => {

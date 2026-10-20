@@ -950,23 +950,23 @@
   var NS = "sketch2figma";
   function writeData(node, key, value) {
     const data = JSON.stringify(value);
-    const prior = Number(node.getPluginData(`${NS}:${key}:count`) || 0), count = Math.ceil(data.length / CHUNK);
-    for (let i2 = 0; i2 < count; i2++)
+    const prior = Number(node.getPluginData(`${NS}:${key}:count`) || 0), count2 = Math.ceil(data.length / CHUNK);
+    for (let i2 = 0; i2 < count2; i2++)
       node.setPluginData(
         `${NS}:${key}:${i2}`,
         data.slice(i2 * CHUNK, (i2 + 1) * CHUNK)
       );
-    for (let i2 = count; i2 < prior; i2++)
+    for (let i2 = count2; i2 < prior; i2++)
       node.setPluginData(`${NS}:${key}:${i2}`, "");
-    node.setPluginData(`${NS}:${key}:count`, String(count));
+    node.setPluginData(`${NS}:${key}:count`, String(count2));
   }
   function readData(node, key, fallback) {
-    const count = Number(node.getPluginData(`${NS}:${key}:count`) || 0);
-    if (!count) return fallback;
-    if (!Number.isInteger(count) || count > 5e4)
+    const count2 = Number(node.getPluginData(`${NS}:${key}:count`) || 0);
+    if (!count2) return fallback;
+    if (!Number.isInteger(count2) || count2 > 5e4)
       throw new Error(`Invalid metadata chunk count: ${key}`);
     let text = "";
-    for (let i2 = 0; i2 < count; i2++)
+    for (let i2 = 0; i2 < count2; i2++)
       text += node.getPluginData(`${NS}:${key}:${i2}`);
     try {
       return JSON.parse(text);
@@ -991,6 +991,16 @@
   function writeIndex(api, index) {
     writeData(api.root, `index:${index.documentId}`, index);
   }
+  var FingerprintPass = class {
+    constructor() {
+      this.snapshots = /* @__PURE__ */ new Map();
+      this.links = /* @__PURE__ */ new Map();
+    }
+    clear() {
+      this.snapshots.clear();
+      this.links.clear();
+    }
+  };
   var SCENE_FIELDS = [
     "name",
     "visible",
@@ -1071,7 +1081,9 @@
     "layoutGrids",
     "guides"
   ];
-  function capture(node, recursive = false, includePlugin = true, skipObsolete = false) {
+  function capture(node, recursive = false, includePlugin = true, skipObsolete = false, cache) {
+    const prior = cache?.get(node.id);
+    if (prior) return prior;
     const props = { type: node.type };
     props.variableBindings = Object.fromEntries(
       Object.entries(node.boundVariables ?? {}).filter(
@@ -1108,20 +1120,23 @@
     const plugin = includePlugin ? Object.fromEntries(
       node.getPluginDataKeys().map((k) => [k, node.getPluginData(k)])
     ) : {};
-    return {
+    const result = {
       props,
       parentId: node.parent?.id ?? null,
-      index: node.parent && "children" in node.parent ? node.parent.children.indexOf(node) : 0,
+      index: node.parent && "children" in node.parent ? node.parent.children.findIndex((child) => child.id === node.id) : 0,
       plugin,
+      ..."children" in node && node.type !== "INSTANCE" ? { childOrder: node.children.map((child) => child.id) } : {},
       ...recursive && "children" in node ? {
         children: node.children.filter(
           (c) => !skipObsolete || !c.getPluginData("sketch2figma:obsolete")
-        ).map((c) => capture(c, true, includePlugin, skipObsolete))
+        ).map((c) => capture(c, true, includePlugin, skipObsolete, cache))
       } : {}
     };
+    cache?.set(node.id, result);
+    return result;
   }
-  async function targetFingerprint(node, version = 2) {
-    const snap = capture(node, true, false, true);
+  async function targetFingerprint(node, version = 2, pass) {
+    const snap = capture(node, true, false, true, pass?.snapshots);
     const clean = (s) => ({
       props: version === 1 ? Object.fromEntries(
         Object.entries(s.props).filter(
@@ -1130,13 +1145,18 @@
       ) : s.props,
       children: s.children?.map(clean)
     });
-    const links = {};
     const visit = async (n) => {
+      const prior = pass?.links.get(n.id);
+      if (prior) return prior;
+      const links2 = {};
       if (n.type === "INSTANCE")
-        links[n.id] = (await n.getMainComponentAsync())?.id ?? null;
-      if ("children" in n) for (const child of n.children) await visit(child);
+        links2[n.id] = (await n.getMainComponentAsync())?.id ?? null;
+      if ("children" in n)
+        for (const child of n.children) Object.assign(links2, await visit(child));
+      pass?.links.set(n.id, links2);
+      return links2;
     };
-    await visit(node);
+    const links = await visit(node);
     return fingerprint({
       componentLinks: links,
       parentId: snap.parentId,
@@ -1145,8 +1165,34 @@
       ownedAppearance: node.parent?.type === "FRAME" && node.parent.getPluginData("sketch2figma:fadeFor") === node.getPluginData("sketch2figma:sourceId") ? clean(capture(node.parent, true, false)) : void 0
     });
   }
+  function insideInstance(node) {
+    for (let parent = node.parent; parent; parent = parent.parent)
+      if (parent.type === "INSTANCE") return true;
+    return false;
+  }
+  function inheritedStructure(key) {
+    return key.startsWith("layout") || key.startsWith("primaryAxis") || key.startsWith("counterAxis") || key.startsWith("padding") || [
+      "relativeTransform",
+      "constraints",
+      "vectorPaths",
+      "vectorNetwork",
+      "booleanOperation",
+      "isMask",
+      "maskType",
+      "clipsContent",
+      "itemSpacing",
+      "itemReverseZIndex",
+      "strokesIncludedInLayout",
+      "minWidth",
+      "maxWidth",
+      "minHeight",
+      "maxHeight",
+      "numberOfFixedChildren",
+      "textAutoResize"
+    ].includes(key);
+  }
   async function restore(api, node, snapshot) {
-    const p = snapshot.props;
+    const p = snapshot.props, inherited = insideInstance(node);
     if (node.type === "INSTANCE" && p.mainComponentId) {
       const master = await api.getNodeByIdAsync(p.mainComponentId);
       if (master?.type !== "COMPONENT")
@@ -1161,14 +1207,17 @@
       for (const font of fonts) await api.loadFontAsync(font);
     }
     const parent = snapshot.parentId ? await api.getNodeByIdAsync(snapshot.parentId) : null;
-    if (parent && parent.type !== "DOCUMENT" && "insertChild" in parent)
+    if (parent && parent.type !== "DOCUMENT" && "insertChild" in parent && !inherited && (node.parent?.id !== parent.id || parent.children.findIndex((child) => child.id === node.id) !== snapshot.index))
       parent.insertChild(Math.min(snapshot.index, parent.children.length), node);
-    if ("resize" in node && p.width > 0 && p.height > 0)
+    if ("resize" in node && !inherited && p.width > 0 && p.height > 0 && (node.width !== p.width || node.height !== p.height))
       node.resize(p.width, p.height);
-    if (node.type === "VECTOR" && p.vectorNetwork)
+    if ("layoutMode" in node && !inherited && p.layoutMode !== void 0 && node.layoutMode !== p.layoutMode)
+      node.layoutMode = p.layoutMode;
+    if (node.type === "VECTOR" && p.vectorNetwork && !inherited && !sameValue(node.vectorNetwork, p.vectorNetwork))
       await node.setVectorNetworkAsync(p.vectorNetwork);
     const restorationErrors = [];
     for (const [key, value] of Object.entries(p)) {
+      if (inherited && inheritedStructure(key)) continue;
       if ([
         "type",
         "mainComponentId",
@@ -1186,7 +1235,7 @@
         continue;
       if (key === "vectorPaths" && node.type === "VECTOR" && p.vectorNetwork)
         continue;
-      if (key in node)
+      if (key in node && !sameValue(node[key], value))
         try {
           node[key] = value;
         } catch (e) {
@@ -1280,9 +1329,70 @@
     }
     if (restorationErrors.length) throw new Error(restorationErrors.join("; "));
   }
+  function clearJournalEntries(root) {
+    for (const key of root.getPluginDataKeys())
+      if (key.startsWith(`${NS}:journal-entry:`) || key.startsWith(`${NS}:journal-index:`))
+        root.setPluginData(key, "");
+  }
+  function readJournal(api) {
+    const stored = readData(
+      api.root,
+      "journal",
+      null
+    );
+    if (!stored || !("storageVersion" in stored)) return stored;
+    if (stored.storageVersion !== 2 || !Number.isSafeInteger(stored.entries) || stored.entries < 0)
+      throw new Error("Corrupted recovery journal header.");
+    const previousIndex = readData(
+      api.root,
+      "journal-index",
+      null
+    );
+    if (!previousIndex || previousIndex.documentId !== stored.documentId)
+      throw new Error("Corrupted recovery journal index.");
+    const data = {
+      documentId: stored.documentId,
+      state: "running",
+      created: [],
+      resources: [],
+      snapshots: {},
+      pages: {},
+      resourceSnapshots: [],
+      previousIndex
+    };
+    for (let i2 = 0; i2 < stored.entries; i2++) {
+      const entry = readData(
+        api.root,
+        `journal-entry:${i2}`,
+        null
+      );
+      if (!entry) throw new Error(`Missing recovery journal entry ${i2}.`);
+      switch (entry.kind) {
+        case "created":
+          data.created.push(entry.id);
+          break;
+        case "resource":
+          data.resources.push(entry.value);
+          break;
+        case "snapshot":
+          data.snapshots[entry.id] = entry.value;
+          break;
+        case "page":
+          data.pages[entry.id] = entry.value;
+          break;
+        case "resourceSnapshot":
+          data.resourceSnapshots.push(entry.value);
+          break;
+        default:
+          throw new Error(`Corrupted recovery journal entry ${i2}.`);
+      }
+    }
+    return data;
+  }
   var Journal = class {
     constructor(api, index) {
       this.api = api;
+      this.entries = 0;
       this.data = {
         documentId: index.documentId,
         state: "running",
@@ -1293,21 +1403,33 @@
         pages: {},
         previousIndex: JSON.parse(JSON.stringify(index))
       };
-      this.save();
+      clearJournalEntries(api.root);
+      writeData(api.root, "journal-index", this.data.previousIndex);
+      this.saveHeader();
     }
-    save() {
-      writeData(this.api.root, "journal", this.data);
+    saveHeader() {
+      writeData(this.api.root, "journal", {
+        storageVersion: 2,
+        documentId: this.data.documentId,
+        entries: this.entries
+      });
+    }
+    append(entry) {
+      writeData(this.api.root, `journal-entry:${this.entries}`, entry);
+      this.entries++;
+      this.saveHeader();
     }
     track(node) {
       this.data.created.push(node.id);
-      this.save();
+      this.append({ kind: "created", id: node.id });
     }
     trackResource(resource) {
-      this.data.resources.push({
+      const value = {
         id: resource.id,
         type: "resolvedType" in resource ? "VARIABLE" : "modes" in resource ? "COLLECTION" : "STYLE"
-      });
-      this.save();
+      };
+      this.data.resources.push(value);
+      this.append({ kind: "resource", value });
     }
     async before(node) {
       if (this.data.created.includes(node.id) || this.data.snapshots[node.id])
@@ -1316,7 +1438,7 @@
       if (node.type === "INSTANCE")
         snapshot.props.mainComponentId = (await node.getMainComponentAsync())?.id;
       this.data.snapshots[node.id] = snapshot;
-      this.save();
+      this.append({ kind: "snapshot", id: node.id, value: snapshot });
     }
     beforePage(page) {
       var _a2;
@@ -1328,11 +1450,12 @@
         guides: page.guides,
         backgrounds: page.backgrounds,
         flowStartingPoints: page.flowStartingPoints,
+        childOrder: page.children.map((child) => child.id),
         plugin: Object.fromEntries(
           page.getPluginDataKeys().map((k) => [k, page.getPluginData(k)])
         )
       };
-      this.save();
+      this.append({ kind: "page", id: page.id, value: this.data.pages[page.id] });
     }
     beforeResource(r) {
       var _a2;
@@ -1352,15 +1475,17 @@
       for (const k of keys)
         props[k] = JSON.parse(JSON.stringify(r[k]));
       (_a2 = this.data).resourceSnapshots ?? (_a2.resourceSnapshots = []);
-      this.data.resourceSnapshots.push({
+      const value = {
         id: r.id,
         type: "valuesByMode" in r ? "VARIABLE" : "modes" in r ? "COLLECTION" : "STYLE",
         props
-      });
-      this.save();
+      };
+      this.data.resourceSnapshots.push(value);
+      this.append({ kind: "resourceSnapshot", value });
     }
     commit() {
       writeData(this.api.root, "journal", null);
+      clearJournalEntries(this.api.root);
     }
     async rollback() {
       return recover(this.api, this.data);
@@ -1371,7 +1496,7 @@
     for (const [id, s] of Object.entries(data.snapshots))
       try {
         const n = await api.getNodeByIdAsync(id), p = s.parentId ? await api.getNodeByIdAsync(s.parentId) : null;
-        if (n && "visible" in n && p && p.type !== "DOCUMENT" && "insertChild" in p)
+        if (n && "visible" in n && p && p.type !== "DOCUMENT" && "insertChild" in p && !insideInstance(n) && (n.parent?.id !== p.id || p.children.findIndex((child) => child.id === n.id) !== s.index))
           p.insertChild(Math.min(s.index, p.children.length), n);
       } catch (e) {
         errors.push(`Relocate ${id}: ${e}`);
@@ -1407,6 +1532,25 @@
       } catch (e) {
         errors.push(`Page ${id}: ${e}`);
       }
+    for (const [id, snapshot] of [
+      ...Object.entries(data.snapshots),
+      ...Object.entries(data.pages ?? {})
+    ]) {
+      if (!snapshot.childOrder) continue;
+      try {
+        const parent = await api.getNodeByIdAsync(id);
+        if (!parent || !("children" in parent) || parent.type === "DOCUMENT" || parent.type === "INSTANCE" || insideInstance(parent))
+          continue;
+        for (const [index, childId] of snapshot.childOrder.entries()) {
+          const child = parent.children.find((node) => node.id === childId);
+          if (!child) throw new Error(`Original child ${childId} is missing`);
+          if (parent.children[index]?.id !== childId)
+            parent.insertChild(index, child);
+        }
+      } catch (error) {
+        errors.push(`Restore order ${id}: ${error}`);
+      }
+    }
     for (const s of [...data.resourceSnapshots ?? []].reverse())
       try {
         const r = s.type === "VARIABLE" ? await api.variables.getVariableByIdAsync(s.id) : s.type === "COLLECTION" ? await api.variables.getVariableCollectionByIdAsync(s.id) : await api.getStyleByIdAsync(s.id);
@@ -1441,65 +1585,112 @@
       data.state = "recovery-needed";
       writeData(api.root, "journal", data);
     } else writeData(api.root, "journal", null);
+    clearJournalEntries(api.root);
     return errors;
   }
-  async function mapping(node, s, conversionHash) {
+  async function mapping(node, s, conversionHash, pass) {
     return {
       nodeId: node.id,
       sourceHash: fingerprint(s),
       conversionHash,
-      targetHash: await targetFingerprint(node),
+      targetHash: await targetFingerprint(node, 2, pass),
       targetHashVersion: 2,
       type: node.type
     };
   }
 
-  // src/figma/report-storage.ts
-  function writeReport(root, report) {
-    const bytes = zlibSync(strToU8(JSON.stringify(report)));
-    let data = "";
-    for (const byte of bytes) data += byte.toString(16).padStart(2, "0");
-    writeData(root, `audit:${report.documentId}`, {
-      encoding: "zlib-hex-v1",
-      data
-    });
-    writeData(root, "lastReport", report.documentId);
-  }
-  function readReport(root, documentId) {
-    const stored = readData(
-      root,
-      `audit:${documentId}`,
-      null
-    );
-    if (!stored) return null;
-    if (stored.encoding !== "zlib-hex-v1" || !/^(?:[\da-f]{2})+$/.test(stored.data))
-      throw new Error("Corrupted conversion audit.");
-    try {
-      const bytes = Uint8Array.from(
-        stored.data.match(/../g),
-        (byte) => parseInt(byte, 16)
-      );
-      return JSON.parse(strFromU8(unzlibSync(bytes)));
-    } catch {
-      throw new Error("Corrupted conversion audit.");
+  // src/core/hex.ts
+  var HEX = Array.from(
+    { length: 256 },
+    (_, byte) => byte.toString(16).padStart(2, "0")
+  );
+  function encodeHex(bytes) {
+    const chunks = [];
+    for (let start = 0; start < bytes.length; start += 4096) {
+      const end = Math.min(start + 4096, bytes.length), part = [];
+      for (let i2 = start; i2 < end; i2++) part.push(HEX[bytes[i2]]);
+      chunks.push(part.join(""));
     }
+    return chunks.join("");
   }
-  function savedReportId(api) {
-    const ids = api.root.getPluginDataKeys().flatMap((key) => {
-      const match = key.match(/^sketch2figma:audit:(.+):count$/);
-      return match ? [match[1]] : [];
-    });
-    const pageId = api.currentPage.getPluginData("sketch2figma:documentId");
-    if (ids.includes(pageId)) return pageId;
-    let last = null;
-    try {
-      last = readData(api.root, "lastReport", null);
-    } catch {
+  function decodeHex(data) {
+    if (data.length % 2) throw new Error("Invalid hex data.");
+    const bytes = new Uint8Array(data.length / 2);
+    const nibble = (code) => code >= 48 && code <= 57 ? code - 48 : code >= 97 && code <= 102 ? code - 87 : -1;
+    for (let i2 = 0; i2 < bytes.length; i2++) {
+      const high = nibble(data.charCodeAt(i2 * 2)), low = nibble(data.charCodeAt(i2 * 2 + 1));
+      if (high < 0 || low < 0) throw new Error("Invalid hex data.");
+      bytes[i2] = high << 4 | low;
     }
-    return last && ids.includes(last) ? last : ids[ids.length - 1];
+    return bytes;
   }
 
   // src/ui/plugin-messages.ts
+  var record = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+  var count = (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+  var requestId = (value) => typeof value === "string" && value.length > 0;
+  var resourceKind = (value) => value === void 0 || ["colors", "layerStyles", "textStyles", "components", "tokens"].includes(
+    value
+  );
+  var fontName = (value) => record(value) && typeof value.family === "string" && typeof value.style === "string";
+  function summary(value) {
+    return record(value) && (value.state === "complete" || value.state === "cancelled" || value.state === "failed") && (value.file === void 0 || typeof value.file === "string") && (value.documentId === void 0 || typeof value.documentId === "string") && (value.layers === void 0 || Array.isArray(value.layers) && value.layers.every(
+      (l) => record(l) && typeof l.sourceId === "string" && typeof l.name === "string" && (l.targetId === void 0 || typeof l.targetId === "string") && (l.sourceType === void 0 || typeof l.sourceType === "string")
+    )) && record(value.totals) && count(value.totals.Partial) && count(value.totals.Unsupported) && Array.isArray(value.validations) && value.validations.every(
+      (v) => record(v) && resourceKind(v.resource) && (v.passed === true || v.passed === false || v.passed === null) && ["kind", "sourceId", "message"].every(
+        (key) => v[key] === void 0 || typeof v[key] === "string"
+      )
+    ) && Array.isArray(value.findings) && value.findings.every(
+      (f) => record(f) && resourceKind(f.resource) && typeof f.message === "string" && ["code", "sourceId", "path"].every(
+        (key) => f[key] === void 0 || typeof f[key] === "string"
+      ) && (f.severity === "info" || f.severity === "warning" || f.severity === "error")
+    );
+  }
+  function readPluginMessage(data) {
+    if (!record(data) || !record(data.pluginMessage)) return;
+    const m = data.pluginMessage;
+    switch (m.type) {
+      case "asset-transfer-ack":
+        if (requestId(m.requestId) && count(m.sequence))
+          return {
+            type: "asset-transfer-ack",
+            requestId: m.requestId,
+            sequence: m.sequence
+          };
+        break;
+      case "fonts":
+        if (requestId(m.requestId) && Array.isArray(m.fonts) && m.fonts.every(fontName))
+          return { type: "fonts", requestId: m.requestId, fonts: m.fonts };
+        break;
+      case "ready":
+        if (Array.isArray(m.fonts) && m.fonts.every(fontName))
+          return {
+            type: "ready",
+            fonts: m.fonts,
+            hasReport: m.hasReport === true
+          };
+        break;
+      case "progress":
+        if (requestId(m.requestId) && count(m.done) && (m.phase === void 0 || typeof m.phase === "string"))
+          return {
+            type: "progress",
+            requestId: m.requestId,
+            done: m.done,
+            ...typeof m.phase === "string" ? { phase: m.phase } : {}
+          };
+        break;
+      case "report":
+        if (requestId(m.requestId) && summary(m.report))
+          return { type: "report", requestId: m.requestId, report: m.report };
+        break;
+      case "saved-report":
+        if (summary(m.report)) return { type: "saved-report", report: m.report };
+        break;
+      case "error":
+        if ((m.requestId === void 0 || requestId(m.requestId)) && typeof m.message === "string")
+          return { type: "error", requestId: m.requestId, message: m.message };
+    }
+  }
   function summarizeReport(report) {
     return {
       file: report.file,
@@ -1517,8 +1708,163 @@
     };
   }
 
+  // src/figma/report-storage.ts
+  var REPORT_FIELDS = ["layers", "findings", "validations"];
+  var RECORD_CHUNK = 256 * 1024;
+  var partKey = (id, bank, field, part) => `audit-records:${id}:${bank}:${field}${part === void 0 ? "" : `:${part}`}`;
+  function clearData(root, key) {
+    const count2 = Number(root.getPluginData(`sketch2figma:${key}:count`) || 0);
+    for (let i2 = 0; i2 < count2; i2++)
+      root.setPluginData(`sketch2figma:${key}:${i2}`, "");
+    root.setPluginData(`sketch2figma:${key}:count`, "");
+  }
+  function recordReport(root, documentId) {
+    const stored = readData(
+      root,
+      `audit-v2:${documentId}`,
+      null
+    );
+    if (stored && (stored.encoding !== "zlib-records-v2" || ![0, 1].includes(stored.bank) || stored.header?.documentId !== documentId || REPORT_FIELDS.some(
+      (field) => !Number.isSafeInteger(stored.counts?.[field]) || stored.counts[field] < 0
+    )))
+      throw new Error("Corrupted conversion audit.");
+    return stored;
+  }
+  async function writeReport(root, report) {
+    const previous = recordReport(root, report.documentId);
+    const bank = previous?.bank === 0 ? 1 : 0;
+    const inactivePrefix = `sketch2figma:audit-records:${report.documentId}:${bank}:`;
+    for (const key of root.getPluginDataKeys())
+      if (key.startsWith(inactivePrefix)) root.setPluginData(key, "");
+    const { layers, findings, validations, ...header } = report;
+    const fields = { layers, findings, validations };
+    const counts = { layers: 0, findings: 0, validations: 0 };
+    for (const field of REPORT_FIELDS) {
+      let records = [];
+      let size = 0;
+      const flush = async () => {
+        if (!records.length) return;
+        const bytes = zlibSync(strToU8(`[${records.join(",")}]`));
+        writeData(
+          root,
+          partKey(report.documentId, bank, field, counts[field]++),
+          encodeHex(bytes)
+        );
+        records = [];
+        size = 0;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      };
+      for (const record2 of fields[field]) {
+        const text = JSON.stringify(record2);
+        if (size + text.length > RECORD_CHUNK) await flush();
+        records.push(text);
+        size += text.length + 1;
+      }
+      await flush();
+    }
+    writeData(
+      root,
+      partKey(report.documentId, bank, "summary"),
+      summarizeReport(report)
+    );
+    writeData(root, `audit-v2:${report.documentId}`, {
+      encoding: "zlib-records-v2",
+      bank,
+      header,
+      counts
+    });
+    writeData(root, "lastReport", report.documentId);
+    if (previous) {
+      for (const field of REPORT_FIELDS)
+        for (let i2 = 0; i2 < previous.counts[field]; i2++)
+          clearData(root, partKey(report.documentId, previous.bank, field, i2));
+      clearData(root, partKey(report.documentId, previous.bank, "summary"));
+    }
+    clearData(root, `audit:${report.documentId}`);
+    clearData(root, `audit-summary:${report.documentId}`);
+  }
+  function readReportSummary(root, documentId) {
+    const current = recordReport(root, documentId);
+    const cached = readData(
+      root,
+      current ? partKey(documentId, current.bank, "summary") : `audit-summary:${documentId}`,
+      null
+    );
+    if (current && cached === null)
+      throw new Error("Corrupted conversion report summary.");
+    if (cached !== null) {
+      const message = readPluginMessage({
+        pluginMessage: { type: "saved-report", report: cached }
+      });
+      if (message?.type !== "saved-report" || message.report.documentId !== documentId)
+        throw new Error("Corrupted conversion report summary.");
+      return message.report;
+    }
+    const full = readReport(root, documentId);
+    if (!full) return null;
+    const summary2 = summarizeReport(full);
+    writeData(root, `audit-summary:${documentId}`, summary2);
+    return summary2;
+  }
+  function readReport(root, documentId) {
+    const current = recordReport(root, documentId);
+    if (current) {
+      const result = {
+        ...current.header,
+        layers: [],
+        findings: [],
+        validations: []
+      };
+      try {
+        for (const field of REPORT_FIELDS)
+          for (let i2 = 0; i2 < current.counts[field]; i2++) {
+            const data = readData(
+              root,
+              partKey(documentId, current.bank, field, i2),
+              null
+            );
+            if (typeof data !== "string" || !data.length) throw new Error();
+            const records = JSON.parse(strFromU8(unzlibSync(decodeHex(data))));
+            if (!Array.isArray(records) || !records.length) throw new Error();
+            for (const record2 of records) result[field].push(record2);
+          }
+        return result;
+      } catch {
+        throw new Error("Corrupted conversion audit.");
+      }
+    }
+    const stored = readData(
+      root,
+      `audit:${documentId}`,
+      null
+    );
+    if (!stored) return null;
+    if (stored.encoding !== "zlib-hex-v1" || typeof stored.data !== "string" || !stored.data.length)
+      throw new Error("Corrupted conversion audit.");
+    try {
+      const bytes = decodeHex(stored.data);
+      return JSON.parse(strFromU8(unzlibSync(bytes)));
+    } catch {
+      throw new Error("Corrupted conversion audit.");
+    }
+  }
+  function savedReportId(api) {
+    const ids = api.root.getPluginDataKeys().flatMap((key) => {
+      const match = key.match(/^sketch2figma:audit(?:-v2)?:(.+):count$/);
+      return match ? [match[1]] : [];
+    });
+    const pageId = api.currentPage.getPluginData("sketch2figma:documentId");
+    if (ids.includes(pageId)) return pageId;
+    let last = null;
+    try {
+      last = readData(api.root, "lastReport", null);
+    } catch {
+    }
+    return last && ids.includes(last) ? last : ids[ids.length - 1];
+  }
+
   // src/core/types.ts
-  var CONVERTER_REVISION = 11;
+  var CONVERTER_REVISION = 14;
   var DEFAULT_OPTIONS = {
     selectedIds: [],
     resources: true,
@@ -1554,9 +1900,69 @@
       (a) => a.tiles && (a.path === reference?._ref || a.path.startsWith(`${reference?._ref}.`))
     );
   }
+  async function applyTiledImageOverride(ctx, target, reference) {
+    const asset = tiledAsset(ctx, reference);
+    const original = readData(target, "imageTiles", null);
+    if (!asset && !original) return false;
+    if (!asset?.tiles || !original || !("children" in target) || asset.tiles.width !== original.width || asset.tiles.height !== original.height || asset.tiles.items.length !== original.tiles.length)
+      throw new Error(
+        "Image override requires a different tile grid; the linked instance was retained without downsampling."
+      );
+    const changes = [];
+    for (const tile of original.tiles) {
+      const replacement = asset.tiles.items.find(
+        (item) => item.x === tile.x && item.y === tile.y && item.width === tile.width && item.height === tile.height
+      );
+      const node = target.children.find(
+        (child) => child.type === "RECTANGLE" && child.getPluginData("sketch2figma:tile") === tile.path
+      );
+      if (!replacement || !node || node.type !== "RECTANGLE")
+        throw new Error("Image override tile coverage differs from its master.");
+      const hash = await imageHash(ctx, { _ref: replacement.path });
+      if (!hash) throw new Error(`Missing override tile ${replacement.path}`);
+      const fills = node.fills;
+      if (typeof fills === "symbol" || !fills.some((p) => p.type === "IMAGE"))
+        throw new Error("Image override target has no native tile paint.");
+      changes.push({
+        node,
+        fills: fills.map(
+          (p) => p.type === "IMAGE" ? { ...p, imageHash: hash } : p
+        )
+      });
+    }
+    for (const change of changes) change.node.fills = change.fills;
+    return true;
+  }
+  async function imageOverrideMatches(ctx, target, reference) {
+    if (!target) return false;
+    const asset = tiledAsset(ctx, reference);
+    const original = readData(target, "imageTiles", null);
+    if (asset || original) {
+      if (!asset?.tiles || !original || !("children" in target) || asset.tiles.width !== original.width || asset.tiles.height !== original.height || asset.tiles.items.length !== original.tiles.length)
+        return false;
+      for (const tile of original.tiles) {
+        const replacement = asset.tiles.items.find(
+          (item) => item.x === tile.x && item.y === tile.y && item.width === tile.width && item.height === tile.height
+        );
+        const node = target.children.find(
+          (child) => child.getPluginData("sketch2figma:tile") === tile.path
+        );
+        if (!replacement || !node || !("fills" in node)) return false;
+        const expected2 = await imageHash(ctx, { _ref: replacement.path });
+        const fills = node.fills;
+        if (!expected2 || typeof fills === "symbol" || !fills.some((p) => p.type === "IMAGE" && p.imageHash === expected2))
+          return false;
+      }
+      return true;
+    }
+    const expected = await imageHash(ctx, reference);
+    return !!expected && "fills" in target && typeof target.fills !== "symbol" && target.fills.some((p) => p.type === "IMAGE" && p.imageHash === expected);
+  }
   async function applyTiledBitmap(ctx, s, node) {
     const asset = tiledAsset(ctx, s.image);
     if (!asset?.tiles) {
+      if (readData(node, "imageTiles", null) !== null)
+        writeData(node, "imageTiles", null);
       if ("children" in node) {
         for (const child of node.children)
           if (child.getPluginData("sketch2figma:tile") || child.getPluginData("sketch2figma:wrapper") === "bitmap-paints") {
@@ -1590,14 +1996,16 @@
         rectangle.setPluginData("sketch2figma:tile", tile.path);
         node.appendChild(rectangle);
       }
-      const bytes = ctx.file.assets.find((a) => a.path === tile.path)?.bytes;
-      if (!bytes)
+      const tileAsset = ctx.file.assets.find((a) => a.path === tile.path);
+      if (!tileAsset || tileAsset.imageError)
         throw new Error(`Missing original-resolution tile ${tile.path}`);
-      let hash = ctx.index.assets[tile.path];
+      let hash = tileAsset.imageHash;
       if (!hash) {
-        hash = ctx.api.createImage(bytes).hash;
-        ctx.index.assets[tile.path] = hash;
+        if (!tileAsset.bytes.length)
+          throw new Error(`Missing original-resolution tile ${tile.path}`);
+        hash = ctx.api.createImage(tileAsset.bytes).hash;
       }
+      ctx.index.assets[tile.path] = hash;
       node.insertChild(i2, rectangle);
       rectangle.name = `Image tile ${i2 + 1}`;
       const tx = x2 + tile.x * scale, ty = y + tile.y * scale;
@@ -1675,6 +2083,88 @@
       "info"
     );
     return true;
+  }
+
+  // src/figma/symbol-background.ts
+  function symbolBackground(source) {
+    if (source._class !== "symbolMaster") return void 0;
+    if (source.includeBackgroundColorInInstance === false || source.includeBackgroundColorInInstance === 0)
+      return "none";
+    if (source.groupBehavior !== void 0)
+      return source.groupBehavior === 1 ? "style" : "none";
+    if (source.hasBackgroundColor !== void 0)
+      return source.hasBackgroundColor ? "legacy" : "none";
+    return "style";
+  }
+  function usesStyleFills(source) {
+    const background = symbolBackground(source);
+    return background === void 0 || background === "style";
+  }
+  function usesLegacyBackground(source) {
+    return source._class === "artboard" && !!source.hasBackgroundColor || symbolBackground(source) === "legacy";
+  }
+
+  // src/core/audit.ts
+  var escapePointer = (key) => key.replace(/~/g, "~0").replace(/\//g, "~1");
+  function leaves(value, prefix = "") {
+    if (value === null || typeof value !== "object") return [prefix];
+    const entries = Object.entries(value);
+    if (!entries.length) return [prefix];
+    return entries.flatMap(
+      ([key, child]) => leaves(child, `${prefix}/${escapePointer(key)}`)
+    );
+  }
+  var Ledger = class {
+    constructor(source, result) {
+      this.source = source;
+      this.result = result;
+      this.items = /* @__PURE__ */ new Map();
+      for (const path of leaves(source))
+        this.items.set(path, {
+          path,
+          status: "Unsupported",
+          reason: "Source property retained; no verified conversion handler."
+        });
+    }
+    checkpoint() {
+      return [...this.items.values()].map((p) => ({ ...p }));
+    }
+    rollback(items) {
+      this.items = new Map(items.map((p) => [p.path, p]));
+    }
+    mark(path, status = "Native", reason = "Applied through the Figma Plugin API.") {
+      if (this.items.has(path)) this.items.set(path, { path, status, reason });
+    }
+    fields(prefix, keys, status = "Native", reason) {
+      for (const k of keys)
+        this.mark(`${prefix}/${escapePointer(k)}`, status, reason);
+    }
+    color(prefix, status = "Native", reason) {
+      this.fields(
+        prefix,
+        ["_class", "red", "green", "blue", "alpha"],
+        status,
+        reason
+      );
+    }
+    finalize() {
+      this.result.properties = [...this.items.values()];
+      return this.result;
+    }
+  };
+  function finishReport(report) {
+    const totals = {
+      Native: 0,
+      "Editable Equivalent": 0,
+      "Visual Equivalent": 0,
+      Partial: 0,
+      Unsupported: 0
+    };
+    for (const layer of report.layers)
+      if (layer.selected) for (const p of layer.properties) totals[p.status]++;
+    report.totals = totals;
+    report.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+    return report;
   }
 
   // src/figma/appearance.ts
@@ -1900,9 +2390,25 @@
     const key = ref._ref ?? ref.sha1?._data;
     const existing = ctx.imageHashes.get(key);
     if (existing) return existing;
-    let bytes = ctx.file.assets.find(
+    const asset = ctx.file.assets.find(
       (a) => a.path === ref._ref || a.path.startsWith(`${ref._ref}.`)
-    )?.bytes;
+    );
+    if (asset?.imageHash) {
+      ctx.imageHashes.set(key, asset.imageHash);
+      ctx.index.assets[key] = asset.imageHash;
+      return asset.imageHash;
+    }
+    if (asset?.imageError) {
+      ctx.finding(
+        "IMAGE_FORMAT",
+        `Asset ${key}: ${asset.imageError}`,
+        void 0,
+        void 0,
+        "error"
+      );
+      return void 0;
+    }
+    let bytes = asset?.bytes.length ? asset.bytes : void 0;
     if (!bytes && ref.data?._data) {
       const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
       let acc = 0, bits2 = 0, out = [];
@@ -2050,10 +2556,19 @@
   }
   async function applyAppearance(ctx, s, node, paintSpace) {
     const st = s.style ?? {}, l = ctx.ledger(s);
+    const styleFills = usesStyleFills(s) ? st.fills ?? [] : [];
+    if (!usesStyleFills(s)) {
+      for (const path of leaves(st.fills ?? [], "/style/fills"))
+        l.mark(
+          path,
+          "Editable Equivalent",
+          "Dormant Symbol background retained in source metadata, excluded from component content as in Sketch instances."
+        );
+    }
     if ("fills" in node && (node.type !== "INSTANCE" || st.fills?.length)) {
       const checkpoint = l.checkpoint();
       const paints = [];
-      for (const [i2, f] of (st.fills ?? []).entries())
+      for (const [i2, f] of styleFills.entries())
         try {
           const p = await paint(
             ctx,
@@ -2174,13 +2689,22 @@
       "Partial",
       "Original style identity retained as metadata; compatible bindings applied separately."
     );
-    if ((s._class === "artboard" || s._class === "symbolMaster") && s.hasBackgroundColor && "fills" in node) {
+    if (usesLegacyBackground(s) && "fills" in node) {
       node.fills = [
         solidPaint(ctx, s, s.backgroundColor, "/backgroundColor"),
         ...typeof node.fills === "symbol" ? [] : node.fills
       ];
       l.mark("/hasBackgroundColor");
       l.color("/backgroundColor");
+    }
+    if (s._class === "symbolMaster") {
+      l.fields("", ["groupBehavior", "includeBackgroundColorInInstance"]);
+      if (symbolBackground(s) !== "legacy")
+        l.mark(
+          "/hasBackgroundColor",
+          "Editable Equivalent",
+          "Legacy canvas background flag does not add a fill to modern Symbol content or backgrounds excluded from instances."
+        );
     }
     if (s._class === "bitmap" && s.image && "fills" in node) {
       if (await applyTiledBitmap(ctx, s, node)) return;
@@ -2285,67 +2809,32 @@
     );
   }
 
-  // src/core/audit.ts
-  var escapePointer = (key) => key.replace(/~/g, "~0").replace(/\//g, "~1");
-  function leaves(value, prefix = "") {
-    if (value === null || typeof value !== "object") return [prefix];
-    const entries = Object.entries(value);
-    if (!entries.length) return [prefix];
-    return entries.flatMap(
-      ([key, child]) => leaves(child, `${prefix}/${escapePointer(key)}`)
-    );
-  }
-  var Ledger = class {
-    constructor(source, result) {
-      this.source = source;
-      this.result = result;
-      this.items = /* @__PURE__ */ new Map();
-      for (const path of leaves(source))
-        this.items.set(path, {
-          path,
-          status: "Unsupported",
-          reason: "Source property retained; no verified conversion handler."
-        });
+  // src/figma/mask-cleanup.ts
+  async function cleanupMaskWrappers(pages, documentId, progress = () => {
+  }) {
+    const nodes = [];
+    const stack = [...pages].flatMap((page) => [...page.children]);
+    while (stack.length) {
+      const node = stack.pop();
+      nodes.push(node);
+      if (node.type !== "INSTANCE" && node.getPluginData("sketch2figma:wrapper") !== "outline-paint" && "children" in node)
+        stack.push(...node.children);
+      if (nodes.length % 256 === 0) {
+        progress(nodes.length);
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
     }
-    checkpoint() {
-      return [...this.items.values()].map((p) => ({ ...p }));
+    const retainedSource = /* @__PURE__ */ new Set();
+    let removed = 0;
+    for (const node of nodes.reverse()) {
+      if (node.removed) continue;
+      const containsSource = node.type === "INSTANCE" || !!node.getPluginData("sketch2figma:sourceId") || "children" in node && node.children.some((child) => retainedSource.has(child.id));
+      if (node.type === "FRAME" && node.getPluginData("sketch2figma:wrapper") === "mask" && node.getPluginData("sketch2figma:documentId") === documentId && !containsSource) {
+        node.remove();
+        removed++;
+      } else if (containsSource) retainedSource.add(node.id);
     }
-    rollback(items) {
-      this.items = new Map(items.map((p) => [p.path, p]));
-    }
-    mark(path, status = "Native", reason = "Applied through the Figma Plugin API.") {
-      if (this.items.has(path)) this.items.set(path, { path, status, reason });
-    }
-    fields(prefix, keys, status = "Native", reason) {
-      for (const k of keys)
-        this.mark(`${prefix}/${escapePointer(k)}`, status, reason);
-    }
-    color(prefix, status = "Native", reason) {
-      this.fields(
-        prefix,
-        ["_class", "red", "green", "blue", "alpha"],
-        status,
-        reason
-      );
-    }
-    finalize() {
-      this.result.properties = [...this.items.values()];
-      return this.result;
-    }
-  };
-  function finishReport(report) {
-    const totals = {
-      Native: 0,
-      "Editable Equivalent": 0,
-      "Visual Equivalent": 0,
-      Partial: 0,
-      Unsupported: 0
-    };
-    for (const layer of report.layers)
-      if (layer.selected) for (const p of layer.properties) totals[p.status]++;
-    report.totals = totals;
-    report.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
-    return report;
+    return removed;
   }
 
   // src/core/dependencies.ts
@@ -2631,6 +3120,13 @@
       if (this.cancelled) throw new Error("IMPORT_CANCELLED");
       this.progress(this.processed.size, s.name ?? s._class);
       await new Promise((r) => setTimeout(r, 0));
+      if (this.cancelled) throw new Error("IMPORT_CANCELLED");
+    }
+    /** Finishing work must yield too: resolved API promises alone can starve Cancel. */
+    async checkpoint(phase) {
+      if (this.cancelled) throw new Error("IMPORT_CANCELLED");
+      this.progress(this.processed.size, phase, phase);
+      await new Promise((resolve) => setTimeout(resolve, 0));
       if (this.cancelled) throw new Error("IMPORT_CANCELLED");
     }
     finish() {
@@ -3491,6 +3987,26 @@
 
   // src/figma/smart-layout.ts
   var close = (a, b) => Math.abs(a - b) <= 1e-6;
+  function smartLayoutAffixPlan(source) {
+    if (source.groupLayout?.axis !== 0 || source.groupLayout?.layoutAnchor !== 0)
+      return;
+    const children = (source.layers ?? []).filter(
+      (child) => child.isVisible !== false
+    );
+    if (children.length !== 3) return;
+    const [background, label, affix] = children;
+    const frame = source.frame;
+    if (!frame || background._class !== "rectangle" || label._class !== "text" || (label.textBehaviour ?? 0) !== 0 || affix._class !== "symbolInstance" || children.some(
+      (child) => !child.frame || child.rotation || child.isFlippedHorizontal || child.isFlippedVertical || child.hasClippingMask || child.flexItem?.ignoreLayout || child.bridge?.ignoresStackLayout
+    ))
+      return;
+    const b = background.frame, l = label.frame, a = affix.frame;
+    if (!close(b.x, 0) || !close(b.y, 0) || !close(b.width, frame.width) || !close(b.height, frame.height) || ![l, a].every(
+      (f) => [f.x, f.y, f.width, f.height].every(Number.isFinite) && f.width > 0 && f.height > 0 && f.x >= 0 && f.y >= 0 && f.x + f.width <= frame.width && f.y + f.height <= frame.height
+    ) || l.x + l.width > a.x)
+      return;
+    return { label, affix };
+  }
   function smartLayoutPlan(source) {
     const gl = source.groupLayout;
     if (![0, 1].includes(gl?.axis) || ![0, 1, 2].includes(gl?.layoutAnchor))
@@ -3588,7 +4104,29 @@
         };
     }
     if ("reason" in plan) {
-      const reason2 = `${plan.reason} Editable source geometry, paint order and constraints retained; legacy responsive behavior is not reproduced.`;
+      const affixPlan = smartLayoutAffixPlan(source);
+      let affixMapped = false;
+      if (affixPlan) {
+        const label = ctx.nodes.get(sourceId(affixPlan.label));
+        const affix = ctx.nodes.get(sourceId(affixPlan.affix));
+        if (label?.parent?.id === node.id && affix?.parent?.id === node.id && affix.type === "INSTANCE" && "constraints" in label && "constraints" in affix) {
+          await ctx.journal.before(label);
+          await ctx.journal.before(affix);
+          affixMapped = await ctx.attempt(source, "/groupLayout", () => {
+            label.constraints = { horizontal: "MIN", vertical: "CENTER" };
+            affix.constraints = { horizontal: "MAX", vertical: "CENTER" };
+          });
+          if (affixMapped)
+            ctx.finding(
+              "SMART_LAYOUT_AFFIX",
+              "Legacy auto-width label and trailing Symbol retain their left/right insets and fixed icon dimensions when an instance resizes. Source frames and background constraints remain intact.",
+              source,
+              "/groupLayout",
+              "info"
+            );
+        }
+      }
+      const reason2 = `${plan.reason} Editable source geometry and paint order retained; ${affixMapped ? "label and trailing Symbol insets use native resize constraints. Other legacy responsive behavior is not reproduced." : "source constraints retained. Legacy responsive behavior is not reproduced."}`;
       await ctx.attempt(
         source,
         "/groupLayout",
@@ -4135,23 +4673,23 @@
       return resource;
     }
     if (resource) {
-      const record = ctx.index.resourceStates?.[key];
-      const targetUnchanged = record && fingerprint(styleSnapshot(resource)) === record.targetHash;
+      const record2 = ctx.index.resourceStates?.[key];
+      const targetUnchanged = record2 && fingerprint(styleSnapshot(resource)) === record2.targetHash;
       const legacySuffix = key.startsWith("effect:") ? " / Effects" : void 0;
       if (legacySuffix && resource.name === `${name}${legacySuffix}`) {
         ctx.journal.beforeResource?.(resource);
         resource.name = name;
-        if (record && targetUnchanged)
-          record.targetHash = fingerprint(styleSnapshot(resource));
+        if (record2 && targetUnchanged)
+          record2.targetHash = fingerprint(styleSnapshot(resource));
       }
-      if (record?.sourceHash === fingerprint(source) && record.conversionHash === ctx.conversionHash && (targetUnchanged || ctx.options.conflict === "preserve-local")) {
+      if (record2?.sourceHash === fingerprint(source) && record2.conversionHash === ctx.conversionHash && (targetUnchanged || ctx.options.conflict === "preserve-local")) {
         const audit = ctx.index.resourceAudits?.[sourceId(source)];
         if (audit)
           for (const p of audit.properties)
             ctx.ledger(source).mark(p.path, p.status, p.reason);
         return resource;
       }
-      if (!record || fingerprint(styleSnapshot(resource)) !== record.targetHash) {
+      if (!record2 || fingerprint(styleSnapshot(resource)) !== record2.targetHash) {
         if (ctx.options.conflict === "preserve-local") {
           ctx.finding(
             "RESOURCE_CONFLICT",
@@ -4618,8 +5156,8 @@
         v.scopes = tokenScopes(tokens, token.name, token.type);
         ctx.journal.trackResource(v);
       } else {
-        const record = ctx.index.resourceStates?.[`${key}:${token.name}`];
-        if (explicit || ctx.options.conflict === "preserve-local" && (!record || fingerprint({ name: v.name, valuesByMode: v.valuesByMode }) !== record.targetHash)) {
+        const record2 = ctx.index.resourceStates?.[`${key}:${token.name}`];
+        if (explicit || ctx.options.conflict === "preserve-local" && (!record2 || fingerprint({ name: v.name, valuesByMode: v.valuesByMode }) !== record2.targetHash)) {
           preserved.add(token.name);
           ctx.finding(
             explicit ? "TOKEN_MAPPING" : "RESOURCE_CONFLICT",
@@ -4797,9 +5335,9 @@
     }
     for (const [key, id] of legacy) {
       const style2 = await ctx.api.getStyleByIdAsync(id);
-      const record = ctx.index.resourceStates?.[key];
+      const record2 = ctx.index.resourceStates?.[key];
       const snapshot = style2?.type === "TEXT" ? { name: style2.name, ...textStyleValues(style2) } : style2 ? styleSnapshot(style2) : null;
-      if (style2 && (ctx.options.styleMap[key] || !record || used.has(id) || fingerprint(snapshot) !== record.targetHash)) {
+      if (style2 && (ctx.options.styleMap[key] || !record2 || used.has(id) || fingerprint(snapshot) !== record2.targetHash)) {
         ctx.finding(
           "LEGACY_STYLE_RETAINED",
           `${style2.name}: an older generated style is still referenced, mapped, or locally edited; retained to protect existing work.`,
@@ -4963,6 +5501,7 @@
             };
             target[field] = fills;
           } else if (kind === "image" && "fills" in target) {
+            if (await applyTiledImageOverride(ctx, target, o.value)) return;
             const hash = await imageHash(ctx, o.value);
             if (!hash) throw new Error("Missing override image");
             const fills = typeof target.fills === "symbol" ? [] : target.fills;
@@ -6435,7 +6974,11 @@
     const checks = ctx.report.validations, all = walkLayers(ctx.file.pages).filter(
       (s) => scope.has(sourceId(s)) && s._class !== "page"
     );
-    for (const s of all) {
+    for (const [validationIndex, s] of all.entries()) {
+      if (validationIndex % 32 === 0)
+        await ctx.checkpoint(
+          `Checking layers \xB7 ${validationIndex}/${all.length}`
+        );
       const id = sourceId(s), n = ctx.nodes.get(id);
       checks.push({
         kind: "layer-exists",
@@ -6540,6 +7083,18 @@
         });
       }
       const appearance = appearanceNode(s, n);
+      if (symbolBackground(s) === "none") {
+        const transparent = "fills" in appearance && typeof appearance.fills !== "symbol" && appearance.fills.length === 0;
+        checks.push({
+          kind: "symbol-background",
+          resource: "components",
+          sourceId: id,
+          passed: transparent,
+          expected: [],
+          actual: "fills" in appearance ? appearance.fills : null,
+          message: `${s.name}: Symbol wrapper ${transparent ? "preserves source transparency" : "has an unexpected background fill"}.`
+        });
+      }
       if (s.sharedStyleID) {
         const id2 = s.sharedStyleID;
         for (const [resource, field] of [
@@ -6661,10 +7216,11 @@
       ["borders", "strokes"]
     ]) {
       if (!(field in n)) continue;
+      if (key === "fills" && !usesStyleFills(s)) continue;
       const paints = n[field];
       if (typeof paints === "symbol") continue;
       for (const [i2, fill] of (s.style?.[key] ?? []).entries()) {
-        const p = paints?.[i2];
+        const p = paints?.[i2 + (key === "fills" && usesLegacyBackground(s) ? 1 : 0)];
         if (fill.fillType === 0 || fill.fillType === void 0)
           check(
             fill.color,
@@ -6681,6 +7237,14 @@
               `${key}/${i2}/gradient/${j}`
             );
       }
+    }
+    if (usesLegacyBackground(s) && "fills" in n && typeof n.fills !== "symbol") {
+      const background = n.fills[0];
+      check(
+        s.backgroundColor,
+        background?.type === "SOLID" ? background.boundVariables?.color : void 0,
+        "backgroundColor"
+      );
     }
     if ("effects" in n) {
       let offset = 0;
@@ -6721,6 +7285,8 @@
       let passed;
       let observed;
       let hasObserved = false;
+      if (m[2] === "image")
+        passed = await imageOverrideMatches(ctx, target, o.value);
       if (m[2] === "textHAlign") {
         const expected = {
           left: "LEFT",
@@ -6832,7 +7398,7 @@
     let ctx, cancelled = false;
     const result = (async () => {
       await api.loadAllPagesAsync();
-      const prior = readData(api.root, "journal", null);
+      const prior = readJournal(api);
       if (prior) {
         const errors = await recover(api, prior);
         if (errors.length)
@@ -6888,15 +7454,29 @@
       for (const p of walkLayers(file.pages))
         for (const child of p.layers ?? []) parentSources.set(sourceId(child), p);
       const preservedIds = /* @__PURE__ */ new Set();
-      const initialTarget = /* @__PURE__ */ new Map();
-      for (const [id, m] of Object.entries(index.nodes)) {
-        const n = await api.getNodeByIdAsync(m.nodeId);
-        if (n && "visible" in n)
-          initialTarget.set(
-            id,
-            await targetFingerprint(n, m.targetHashVersion ?? 1)
+      let reusedFindings;
+      function findingsForReusedLayers() {
+        if (reusedFindings) return reusedFindings;
+        reusedFindings = /* @__PURE__ */ new Map();
+        try {
+          const previous = readReportSummary(api.root, file.documentId);
+          for (const finding of previous?.findings ?? []) {
+            if (!finding.sourceId || !finding.code) continue;
+            if (["FONT_REPLACED", "FONT_FALLBACK"].includes(finding.code))
+              continue;
+            const list = reusedFindings.get(finding.sourceId) ?? [];
+            list.push({ ...finding, code: finding.code });
+            reusedFindings.set(finding.sourceId, list);
+          }
+        } catch (error) {
+          c.finding(
+            "PREVIOUS_AUDIT_UNAVAILABLE",
+            `Prior conversion findings could not be restored: ${error}`
           );
+        }
+        return reusedFindings;
       }
+      const initialTarget = /* @__PURE__ */ new Map();
       let resourcePage;
       const pages = /* @__PURE__ */ new Map();
       async function pageFor(p) {
@@ -6952,13 +7532,17 @@
         return resourcePage;
       }
       async function existing(s) {
-        const record = index.nodes[sourceId(s)];
-        if (!record) return void 0;
-        const n = await api.getNodeByIdAsync(record.nodeId);
+        const record2 = index.nodes[sourceId(s)];
+        if (!record2) return void 0;
+        const n = await api.getNodeByIdAsync(record2.nodeId);
         return n && "visible" in n ? n : void 0;
       }
       function restoreAudits(s, node, local = false) {
         for (const source of walkLayers([s])) {
+          if (!local)
+            report.findings.push(
+              ...findingsForReusedLayers().get(sourceId(source)) ?? []
+            );
           const old = index.nodes[sourceId(source)];
           const n = c.nodes.get(sourceId(source));
           const ledger = c.ledger(source);
@@ -7151,6 +7735,27 @@
         return node;
       }
       try {
+        const existing2 = Object.entries(index.nodes), fingerprints = new FingerprintPass();
+        try {
+          for (const [position, [id, m]] of existing2.entries()) {
+            if (position % 16 === 0)
+              await c.checkpoint(
+                `Checking existing layers \xB7 ${position}/${existing2.length}`
+              );
+            const node = await api.getNodeByIdAsync(m.nodeId);
+            if (node && "visible" in node)
+              initialTarget.set(
+                id,
+                await targetFingerprint(
+                  node,
+                  m.targetHashVersion ?? 1,
+                  fingerprints
+                )
+              );
+          }
+        } finally {
+          fingerprints.clear();
+        }
         c.fonts = await api.listAvailableFontsAsync();
         if (c.cancelled) throw new Error("IMPORT_CANCELLED");
         for (const name of importFontNames(file, options)) {
@@ -7222,7 +7827,14 @@
                 page.appendChild(node);
             }
         }
-        for (const source of walkLayers(file.pages)) {
+        const finalSources = walkLayers(file.pages);
+        let finishing = 0;
+        await c.checkpoint("Positioning layers");
+        for (const source of finalSources) {
+          if (++finishing % 32 === 0)
+            await c.checkpoint(
+              `Positioning layers \xB7 ${finishing}/${finalSources.length}`
+            );
           const node = c.nodes.get(sourceId(source));
           if (!node || !mutable.has(sourceId(source)) || node.type === "VECTOR")
             continue;
@@ -7232,31 +7844,55 @@
             node.relativeTransform = transform(source);
           }
         }
+        finishing = 0;
+        await c.checkpoint("Finishing masks");
         for (const p of file.pages)
           for (const container of walkLayers(p.layers ?? []))
             if (mutable.has(sourceId(container))) {
+              if (++finishing % 32 === 0)
+                await c.checkpoint(`Finishing masks \xB7 ${finishing}`);
               const node = c.nodes.get(sourceId(container));
               if (node && "children" in node && node.type !== "INSTANCE")
                 await reconstructMasks(c, container, node);
             }
-        for (const source of walkLayers(file.pages)) {
+        finishing = 0;
+        for (const source of finalSources) {
+          if (++finishing % 32 === 0)
+            await c.checkpoint(
+              `Finishing image masks \xB7 ${finishing}/${finalSources.length}`
+            );
           const node = c.nodes.get(sourceId(source));
           if (node && !preservedIds.has(sourceId(source)))
             await applyOpacityMask(c, source, node);
         }
+        await c.checkpoint("Binding tokens");
         await applyTokenBindings(c, preservedIds);
+        finishing = 0;
+        await c.checkpoint("Linking text styles");
         for (const [id, node] of c.nodes) {
+          if (++finishing % 32 === 0)
+            await c.checkpoint(
+              `Linking text styles \xB7 ${finishing}/${c.nodes.size}`
+            );
           const source = sourceById.get(id);
           if (source && mutable.has(id) && node.type === "TEXT")
             await reconcileTextStyleBindings(c, source, node);
         }
+        finishing = 0;
+        await c.checkpoint("Linking Symbol text styles");
         for (const [id, node] of c.nodes) {
+          if (++finishing % 32 === 0)
+            await c.checkpoint(
+              `Linking Symbol text styles \xB7 ${finishing}/${c.nodes.size}`
+            );
           const source = sourceById.get(id);
           if (source && mutable.has(id) && node.type === "INSTANCE")
             for (const text of instanceTextSources(node, source))
               await reconcileTextStyleBindings(c, text.source, text.node, source);
         }
+        await c.checkpoint("Linking prototypes");
         await applyPrototypes(c, mutable);
+        await c.checkpoint("Checking resources");
         await validateImport(c, scope);
         const live = new Set(walkLayers(file.pages).map(sourceId));
         for (const [id, m] of Object.entries(index.nodes))
@@ -7267,15 +7903,32 @@
               void 0,
               id
             );
-        for (const [id, node] of c.nodes) {
-          const source = sourceById.get(id);
-          if (source && !node.removed) {
-            if (!preservedIds.has(id))
-              index.nodes[id] = await mapping(node, source, c.conversionHash);
-            const ledger = c.ledgers.get(id);
-            if (ledger) writeData(node, "audit", ledger.finalize());
+        finishing = 0;
+        await c.checkpoint("Saving layer metadata");
+        const savedFingerprints = new FingerprintPass();
+        try {
+          for (const [id, node] of c.nodes) {
+            if (++finishing % 16 === 0)
+              await c.checkpoint(
+                `Saving layer metadata \xB7 ${finishing}/${c.nodes.size}`
+              );
+            const source = sourceById.get(id);
+            if (source && !node.removed) {
+              if (!preservedIds.has(id))
+                index.nodes[id] = await mapping(
+                  node,
+                  source,
+                  c.conversionHash,
+                  savedFingerprints
+                );
+              const ledger = c.ledgers.get(id);
+              if (ledger) writeData(node, "audit", ledger.finalize());
+            }
           }
+        } finally {
+          savedFingerprints.clear();
         }
+        await c.checkpoint("Saving document metadata");
         const docSource = {
           ...input.document,
           _class: "document",
@@ -7317,22 +7970,62 @@
         } catch (error) {
           c.finding("LEGACY_STYLE_CLEANUP", String(error));
         }
+        let cleanedOwnedNodes = false;
         try {
           for (const obsolete of c.cleanup)
-            if (!obsolete.removed) obsolete.remove();
+            if (!obsolete.removed) {
+              obsolete.remove();
+              cleanedOwnedNodes = true;
+            }
         } catch (error) {
           c.finding("OWNED_NODE_CLEANUP", String(error));
         }
         try {
-          for (const page of pages.values())
-            for (const wrapper of page.findAll(
-              (n) => n.type === "FRAME" && n.getPluginData("sketch2figma:wrapper") === "mask" && n.getPluginData("sketch2figma:documentId") === file.documentId && n.findAll(
-                (child) => !!child.getPluginData("sketch2figma:sourceId")
-              ).length === 0
-            ))
-              wrapper.remove();
+          const removed = await cleanupMaskWrappers(
+            pages.values(),
+            file.documentId,
+            (visited) => c.progress(
+              c.processed.size,
+              "Cleaning mask wrappers",
+              `Cleaning mask wrappers \xB7 ${visited}`
+            )
+          );
+          cleanedOwnedNodes || (cleanedOwnedNodes = removed > 0);
         } catch (e) {
           c.finding("WRAPPER_CLEANUP", String(e));
+        }
+        if (cleanedOwnedNodes) {
+          const finalFingerprints = new FingerprintPass();
+          try {
+            let saved = 0;
+            for (const [id, node] of c.nodes) {
+              if (!node.removed && !preservedIds.has(id) && index.nodes[id])
+                index.nodes[id].targetHash = await targetFingerprint(
+                  node,
+                  2,
+                  finalFingerprints
+                );
+              if (++saved % 64 === 0) {
+                c.progress(
+                  c.processed.size,
+                  "Saving final sync state",
+                  `Saving final sync state \xB7 ${saved}/${c.nodes.size}`
+                );
+                await new Promise((resolve) => setTimeout(resolve, 0));
+              }
+            }
+            writeIndex(api, index);
+          } catch (error) {
+            c.finding(
+              "SYNC_INDEX_REFRESH",
+              String(error),
+              void 0,
+              void 0,
+              "error"
+            );
+          } finally {
+            finalFingerprints.clear();
+          }
         }
         report.sourceMetadataPreserved = true;
         report.state = "complete";
@@ -7370,9 +8063,23 @@
       for (const source of walkLayers(input.pages))
         if (!c.ledgers.has(sourceId(source))) c.ledger(source, false);
       c.finish();
+      const findingKeys = /* @__PURE__ */ new Set();
+      report.findings = report.findings.filter((finding) => {
+        const key = JSON.stringify([
+          finding.code,
+          finding.sourceId,
+          finding.path,
+          finding.severity,
+          finding.resource,
+          finding.message
+        ]);
+        if (findingKeys.has(key)) return false;
+        findingKeys.add(key);
+        return true;
+      });
       finishReport(report);
       try {
-        writeReport(api.root, report);
+        await writeReport(api.root, report);
       } catch (error) {
         c.finding(
           "AUDIT_STORAGE",
@@ -7495,7 +8202,7 @@
   }
   function withLibraries(file, libs) {
     if (!libs.length) return file;
-    const known = masters(file), foreign = [...file.document.foreignSymbols ?? []], assets = [...file.assets];
+    const known = masters(file), foreign = [...file.document.foreignSymbols ?? []], assets2 = [...file.assets];
     for (const lib of libs) {
       for (const [id, s] of masters(lib))
         if (!known.has(id)) {
@@ -7507,7 +8214,7 @@
           });
         }
       for (const a of lib.assets)
-        if (!assets.some((x2) => x2.path === a.path)) assets.push(a);
+        if (!assets2.some((x2) => x2.path === a.path)) assets2.push(a);
     }
     return {
       ...file,
@@ -7536,9 +8243,86 @@
           ]
         }
       },
-      assets
+      assets: assets2
     };
   }
+
+  // src/figma/asset-transfer.ts
+  var NativeAssetTransfer = class {
+    constructor(createImage) {
+      this.createImage = createImage;
+    }
+    get active() {
+      return !!this.session;
+    }
+    owns(requestId2) {
+      return !!this.session && this.session.requestId === requestId2;
+    }
+    begin(requestId2, file, lengths) {
+      if (this.session) throw new Error("Another asset transfer is active.");
+      if (!requestId2 || !file || !Array.isArray(file.pages) || !Array.isArray(file.assets) || !Array.isArray(lengths) || lengths.length !== file.assets.length || lengths.some((length) => !Number.isSafeInteger(length) || length < 0) || file.assets.some(
+        (asset) => !asset || typeof asset.path !== "string" || !(asset.bytes instanceof Uint8Array) || asset.bytes.byteLength !== 0
+      ) || new Set(file.assets.map((asset) => asset.path)).size !== file.assets.length)
+        throw new Error("Invalid asset transfer metadata.");
+      this.session = {
+        requestId: requestId2,
+        file: {
+          ...file,
+          assets: file.assets.map((asset) => {
+            const { imageHash: _hash, imageError: _error, ...metadata } = asset;
+            return metadata;
+          })
+        },
+        lengths,
+        index: 0,
+        sequence: 0,
+        offset: 0
+      };
+      this.skipEmpty();
+    }
+    skipEmpty() {
+      const session = this.session;
+      while (session.index < session.lengths.length && session.lengths[session.index] === 0)
+        session.index++;
+    }
+    append(requestId2, sequence, index, offset, bytes) {
+      const session = this.session;
+      if (!session || session.requestId !== requestId2)
+        throw new Error("Asset transfer is no longer active.");
+      const length = session.lengths[session.index];
+      if (length === void 0 || sequence !== session.sequence + 1 || index !== session.index || offset !== session.offset || !(bytes instanceof Uint8Array) || !bytes.byteLength || offset + bytes.byteLength > length)
+        throw new Error("Asset transfer is incomplete or out of order.");
+      session.buffer ?? (session.buffer = new Uint8Array(length));
+      session.buffer.set(bytes, offset);
+      session.offset += bytes.byteLength;
+      session.sequence = sequence;
+      if (session.offset === length) {
+        const asset = session.file.assets[index];
+        if (asset.path.startsWith("images/")) {
+          try {
+            asset.imageHash = this.createImage(session.buffer);
+          } catch (error) {
+            asset.imageError = String(error);
+          }
+        } else asset.bytes = session.buffer;
+        session.buffer = void 0;
+        session.offset = 0;
+        session.index++;
+        this.skipEmpty();
+      }
+    }
+    take(requestId2) {
+      const session = this.session;
+      if (!session || session.requestId !== requestId2 || session.index !== session.lengths.length)
+        throw new Error("Asset transfer has not finished.");
+      this.session = void 0;
+      return session.file;
+    }
+    abort(requestId2) {
+      if (requestId2 === void 0 || this.owns(requestId2))
+        this.session = void 0;
+    }
+  };
 
   // src/plugin.ts
   figma.showUI(__html__, {
@@ -7548,6 +8332,9 @@
     title: "Sketch \u2192 Figma"
   });
   var running;
+  var assets = new NativeAssetTransfer(
+    (bytes) => figma.createImage(bytes).hash
+  );
   var send = (message) => figma.ui.postMessage(message);
   async function initialize() {
     const fonts = await figma.listAvailableFontsAsync();
@@ -7561,6 +8348,7 @@
     const m = message;
     let ownImport;
     try {
+      if (!m || typeof m.type !== "string") return;
       if (m.type === "ui-ready") {
         await initialize();
         return;
@@ -7575,15 +8363,15 @@
         return;
       }
       if (m.type === "get-report") {
-        if (running) return;
-        const id = savedReportId(figma), report = id ? readReport(figma.root, id) : null;
+        if (running || assets.active) return;
+        const id = savedReportId(figma), report = id ? readReportSummary(figma.root, id) : null;
         if (!report)
           throw new Error("No saved import report is available in this file.");
-        send({ type: "saved-report", report: summarizeReport(report) });
+        send({ type: "saved-report", report });
         return;
       }
       if (m.type === "select-layer") {
-        if (running || typeof m.targetId !== "string") return;
+        if (running || assets.active || typeof m.targetId !== "string") return;
         const node = await figma.getNodeByIdAsync(m.targetId);
         if (!node || node.type === "DOCUMENT" || node.type === "PAGE")
           throw new Error("The imported layer is no longer available.");
@@ -7597,11 +8385,36 @@
         return;
       }
       if (m.type === "cancel") {
+        assets.abort();
         running?.cancel();
+        return;
+      }
+      if (m.type === "asset-transfer-abort") {
+        if (typeof m.requestId === "string") assets.abort(m.requestId);
+        return;
+      }
+      if (m.type === "asset-transfer-start") {
+        if (running) throw new Error("Another import is active.");
+        if (typeof m.requestId !== "string" || m.sequence !== 0)
+          throw new Error("Invalid asset transfer request.");
+        assets.begin(m.requestId, m.file, m.lengths);
+        send({ type: "asset-transfer-ack", requestId: m.requestId, sequence: 0 });
+        return;
+      }
+      if (m.type === "asset-transfer-chunk") {
+        assets.append(m.requestId, m.sequence, m.index, m.offset, m.bytes);
+        send({
+          type: "asset-transfer-ack",
+          requestId: m.requestId,
+          sequence: m.sequence
+        });
         return;
       }
       if (m.type === "import") {
         if (running) throw new Error("Another import is active.");
+        if (m.transferred) m.file = assets.take(m.requestId);
+        else if (assets.active)
+          throw new Error("Another asset transfer is active.");
         if (!m.file || !Array.isArray(m.file.pages))
           throw new Error("Invalid import payload.");
         const options = { ...DEFAULT_OPTIONS, ...m.options };
@@ -7611,7 +8424,7 @@
           m.file,
           options,
           m.libraries ?? [],
-          (done, name) => send({ type: "progress", requestId: m.requestId, done, name })
+          (done, name, phase) => send({ type: "progress", requestId: m.requestId, done, name, phase })
         );
         const report = await running.result;
         running = void 0;
@@ -7622,6 +8435,7 @@
         });
       }
     } catch (error) {
+      if (assets.owns(m.requestId)) assets.abort(m.requestId);
       if (ownImport && running === ownImport) running = void 0;
       send({ type: "error", requestId: m.requestId, message: String(error) });
     }

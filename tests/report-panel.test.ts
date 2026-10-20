@@ -6,7 +6,32 @@ import { bindingFixture } from "./binding-fixture";
 import { startImport } from "../src/figma/importer";
 import { readIndex, writeData } from "../src/figma/storage";
 import { savedReportId } from "../src/figma/report-storage";
+import { DEFAULT_OPTIONS } from "../src/core/types";
 let plugin: string;
+it("keeps native finishing work cancellable after layer creation and rolls back source mutations", async () => {
+  const h = createHost(),
+    before = h.nodes.size,
+    phases: string[] = [];
+  let run: ReturnType<typeof startImport>;
+  run = startImport(
+    h.api,
+    bindingFixture(),
+    { ...DEFAULT_OPTIONS, fallbackFont: { family: "Inter", style: "Regular" } },
+    [],
+    (_done, _name, phase) => {
+      if (!phase) return;
+      phases.push(phase);
+      if (phase.startsWith("Checking layers")) run.cancel();
+    },
+  );
+  const report = await run.result;
+  expect(phases).toContain("Linking text styles");
+  expect(phases).toContain("Linking Symbol text styles");
+  expect(report.state).toBe("cancelled");
+  expect(report.sourceMetadataPreserved).toBe(false);
+  expect(h.nodes.size).toBe(before);
+  expect(phases).not.toContain("Saving layer metadata");
+});
 beforeAll(async () => {
   const r = await build({
     entryPoints: ["src/plugin.ts"],

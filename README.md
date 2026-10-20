@@ -16,7 +16,7 @@ Import `.sketch` files into Figma as editable layers, components and design reso
 | Color variables | Source swatches, original names and supported variable bindings |
 | Layer styles | Editable fills and borders; compatible native Effect Styles |
 | Text styles | Original local Text Styles, mixed formatting and binding reconciliation |
-| Symbols | Native components, linked instances, nested relationships and supported overrides |
+| Symbols | Native components, linked instances, source background inclusion, nested relationships and supported overrides |
 | Layout | Sketch Stacks mapped to Auto Layout, including supported padding, gaps, sizing, constraints and radii |
 | Tokens | Explicitly supplied values, aliases, modes and compatible bindings |
 | Shapes and images | Editable vector geometry, boolean operations, masks and embedded images |
@@ -35,13 +35,15 @@ npm run build
 
 In Figma, open **Plugins → Development → Import plugin from manifest…**, select `manifest.json`, then run **Sketch → Figma**.
 
+Reimport preserves local edits by default. Enable **Replace edits in imported layers** when the Sketch source should overwrite edits to previously imported content.
+
 ## Fidelity and limitations
 
 The importer prioritizes editable Figma objects and retains source metadata for unsupported properties.
 
 - Text overrides that Figma cannot retain alongside a named style preserve their appearance values, but may remain unbound. These ranges are reported.
 - Advanced typography, responsive behavior, library dependencies and some appearance or prototype features remain incomplete.
-- Oversized images use multiple image tiles to preserve source resolution.
+- Oversized images use multiple image tiles to preserve source resolution. Linked image overrides reuse those tiles when the source and replacement grids match; incompatible grids are reported instead of silently changing the image or downsampling it.
 - The visible report focuses on resources. Geometry checks remain in the complete stored audit.
 
 ## Documentation

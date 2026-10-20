@@ -19,9 +19,10 @@ export type ImportSummary = {
     Partial<Omit<Finding, "severity" | "message">>)[];
 };
 type PluginMessage =
+  | { type: "asset-transfer-ack"; requestId: string; sequence: number }
   | { type: "ready"; fonts: FontName[]; hasReport?: boolean }
   | { type: "fonts"; requestId: string; fonts: FontName[] }
-  | { type: "progress"; requestId: string; done: number }
+  | { type: "progress"; requestId: string; done: number; phase?: string }
   | { type: "report"; requestId: string; report: ImportSummary }
   | { type: "saved-report"; report: ImportSummary }
   | { type: "error"; requestId?: string; message: string };
@@ -91,6 +92,14 @@ export function readPluginMessage(data: unknown): PluginMessage | undefined {
   if (!record(data) || !record(data.pluginMessage)) return;
   const m = data.pluginMessage;
   switch (m.type) {
+    case "asset-transfer-ack":
+      if (requestId(m.requestId) && count(m.sequence))
+        return {
+          type: "asset-transfer-ack",
+          requestId: m.requestId,
+          sequence: m.sequence,
+        };
+      break;
     case "fonts":
       if (
         requestId(m.requestId) &&
@@ -108,8 +117,17 @@ export function readPluginMessage(data: unknown): PluginMessage | undefined {
         };
       break;
     case "progress":
-      if (requestId(m.requestId) && count(m.done))
-        return { type: "progress", requestId: m.requestId, done: m.done };
+      if (
+        requestId(m.requestId) &&
+        count(m.done) &&
+        (m.phase === undefined || typeof m.phase === "string")
+      )
+        return {
+          type: "progress",
+          requestId: m.requestId,
+          done: m.done,
+          ...(typeof m.phase === "string" ? { phase: m.phase } : {}),
+        };
       break;
     case "report":
       if (requestId(m.requestId) && summary(m.report))

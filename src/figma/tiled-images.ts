@@ -1,6 +1,7 @@
 import type { Asset, Sketch } from "../core/types";
 import type { ImportContext } from "./context";
-import { writeData } from "./storage";
+import { readData, writeData } from "./storage";
+import { imageHash } from "./appearance";
 export function tiledAsset(
   ctx: ImportContext,
   reference: Sketch,
@@ -11,6 +12,119 @@ export function tiledAsset(
       (a.path === reference?._ref || a.path.startsWith(`${reference?._ref}.`)),
   );
 }
+/**
+ * Instance descendants cannot gain new tile children or change their geometry.
+ * A matching source grid can still use native image-paint overrides without
+ * detaching the instance or downsampling any pixels.
+ */
+export async function applyTiledImageOverride(
+  ctx: ImportContext,
+  target: SceneNode,
+  reference: Sketch,
+): Promise<boolean> {
+  const asset = tiledAsset(ctx, reference);
+  const original = readData<{
+    width: number;
+    height: number;
+    tiles: NonNullable<Asset["tiles"]>["items"];
+  } | null>(target, "imageTiles", null);
+  if (!asset && !original) return false;
+  if (
+    !asset?.tiles ||
+    !original ||
+    !("children" in target) ||
+    asset.tiles.width !== original.width ||
+    asset.tiles.height !== original.height ||
+    asset.tiles.items.length !== original.tiles.length
+  )
+    throw new Error(
+      "Image override requires a different tile grid; the linked instance was retained without downsampling.",
+    );
+  const changes: { node: RectangleNode; fills: Paint[] }[] = [];
+  for (const tile of original.tiles) {
+    const replacement = asset.tiles.items.find(
+      (item) =>
+        item.x === tile.x &&
+        item.y === tile.y &&
+        item.width === tile.width &&
+        item.height === tile.height,
+    );
+    const node = target.children.find(
+      (child) =>
+        child.type === "RECTANGLE" &&
+        child.getPluginData("sketch2figma:tile") === tile.path,
+    );
+    if (!replacement || !node || node.type !== "RECTANGLE")
+      throw new Error("Image override tile coverage differs from its master.");
+    const hash = await imageHash(ctx, { _ref: replacement.path });
+    if (!hash) throw new Error(`Missing override tile ${replacement.path}`);
+    const fills = node.fills;
+    if (typeof fills === "symbol" || !fills.some((p) => p.type === "IMAGE"))
+      throw new Error("Image override target has no native tile paint.");
+    changes.push({
+      node,
+      fills: fills.map((p) =>
+        p.type === "IMAGE" ? { ...p, imageHash: hash } : p,
+      ),
+    });
+  }
+  // Resolve and validate every tile before changing the first paint.
+  for (const change of changes) change.node.fills = change.fills;
+  return true;
+}
+export async function imageOverrideMatches(
+  ctx: ImportContext,
+  target: SceneNode | undefined,
+  reference: Sketch,
+): Promise<boolean> {
+  if (!target) return false;
+  const asset = tiledAsset(ctx, reference);
+  const original = readData<{
+    width: number;
+    height: number;
+    tiles: NonNullable<Asset["tiles"]>["items"];
+  } | null>(target, "imageTiles", null);
+  if (asset || original) {
+    if (
+      !asset?.tiles ||
+      !original ||
+      !("children" in target) ||
+      asset.tiles.width !== original.width ||
+      asset.tiles.height !== original.height ||
+      asset.tiles.items.length !== original.tiles.length
+    )
+      return false;
+    for (const tile of original.tiles) {
+      const replacement = asset.tiles.items.find(
+        (item) =>
+          item.x === tile.x &&
+          item.y === tile.y &&
+          item.width === tile.width &&
+          item.height === tile.height,
+      );
+      const node = target.children.find(
+        (child) => child.getPluginData("sketch2figma:tile") === tile.path,
+      );
+      if (!replacement || !node || !("fills" in node)) return false;
+      const expected = await imageHash(ctx, { _ref: replacement.path });
+      const fills = node.fills;
+      if (
+        !expected ||
+        typeof fills === "symbol" ||
+        !fills.some((p) => p.type === "IMAGE" && p.imageHash === expected)
+      )
+        return false;
+    }
+    return true;
+  }
+  const expected = await imageHash(ctx, reference);
+  return (
+    !!expected &&
+    "fills" in target &&
+    typeof target.fills !== "symbol" &&
+    target.fills.some((p) => p.type === "IMAGE" && p.imageHash === expected)
+  );
+}
 export async function applyTiledBitmap(
   ctx: ImportContext,
   s: Sketch,
@@ -18,6 +132,8 @@ export async function applyTiledBitmap(
 ): Promise<boolean> {
   const asset = tiledAsset(ctx, s.image);
   if (!asset?.tiles) {
+    if (readData(node, "imageTiles", null) !== null)
+      writeData(node, "imageTiles", null);
     if ("children" in node)
       for (const child of node.children)
         if (
@@ -58,14 +174,16 @@ export async function applyTiledBitmap(
       rectangle.setPluginData("sketch2figma:tile", tile.path);
       node.appendChild(rectangle);
     }
-    const bytes = ctx.file.assets.find((a) => a.path === tile.path)?.bytes;
-    if (!bytes)
+    const tileAsset = ctx.file.assets.find((a) => a.path === tile.path);
+    if (!tileAsset || tileAsset.imageError)
       throw new Error(`Missing original-resolution tile ${tile.path}`);
-    let hash = ctx.index.assets[tile.path];
+    let hash = tileAsset.imageHash;
     if (!hash) {
-      hash = ctx.api.createImage(bytes).hash;
-      ctx.index.assets[tile.path] = hash;
+      if (!tileAsset.bytes.length)
+        throw new Error(`Missing original-resolution tile ${tile.path}`);
+      hash = ctx.api.createImage(tileAsset.bytes).hash;
     }
+    ctx.index.assets[tile.path] = hash;
     node.insertChild(i, rectangle);
     rectangle.name = `Image tile ${i + 1}`;
     const tx = x + tile.x * scale,

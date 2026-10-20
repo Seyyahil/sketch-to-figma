@@ -1,5 +1,6 @@
-import { writeReport } from "./report-storage";
+import { readReportSummary, writeReport } from "./report-storage";
 import { applyOpacityMask } from "./opacity-masks";
+import { cleanupMaskWrappers } from "./mask-cleanup";
 import { finishReport, Ledger } from "../core/audit";
 import { dependencyOrder, masters } from "../core/dependencies";
 import { importFontNames, resourceSelection } from "../core/resource-selection";
@@ -11,6 +12,7 @@ import {
   walkLayers,
   isEmptySymbol,
   type ConversionReport,
+  type Finding,
   type ImportOptions,
   type LayerAudit,
   type Sketch,
@@ -19,14 +21,15 @@ import {
 import { ImportContext } from "./context";
 import {
   Journal,
+  FingerprintPass,
   mapping,
   readData,
   readIndex,
+  readJournal,
   targetFingerprint,
   writeData,
   writeIndex,
   recover,
-  type JournalData,
 } from "./storage";
 import { appearanceNode, applyAppearance } from "./appearance";
 import { applyGeometry, createNode } from "./geometry";
@@ -54,13 +57,13 @@ export function startImport(
   input: SketchFile,
   options: ImportOptions = DEFAULT_OPTIONS,
   libraries: SketchFile[] = [],
-  progress: (done: number, name: string) => void = () => {},
+  progress: (done: number, name: string, phase?: string) => void = () => {},
 ): ImportRun {
   let ctx: ImportContext | undefined,
     cancelled = false;
   const result = (async () => {
     await api.loadAllPagesAsync();
-    const prior = readData<JournalData | null>(api.root, "journal", null);
+    const prior = readJournal(api);
     if (prior) {
       const errors = await recover(api, prior);
       if (errors.length)
@@ -121,15 +124,30 @@ export function startImport(
     for (const p of walkLayers(file.pages))
       for (const child of p.layers ?? []) parentSources.set(sourceId(child), p);
     const preservedIds = new Set<string>();
-    const initialTarget = new Map<string, string>();
-    for (const [id, m] of Object.entries(index.nodes)) {
-      const n = await api.getNodeByIdAsync(m.nodeId);
-      if (n && "visible" in n)
-        initialTarget.set(
-          id,
-          await targetFingerprint(n as SceneNode, m.targetHashVersion ?? 1),
+    let reusedFindings: Map<string, Finding[]> | undefined;
+    function findingsForReusedLayers(): Map<string, Finding[]> {
+      if (reusedFindings) return reusedFindings;
+      reusedFindings = new Map();
+      try {
+        const previous = readReportSummary(api.root, file.documentId);
+        for (const finding of previous?.findings ?? []) {
+          if (!finding.sourceId || !finding.code) continue;
+          // The current font plan emits its own notice on every run.
+          if (["FONT_REPLACED", "FONT_FALLBACK"].includes(finding.code))
+            continue;
+          const list = reusedFindings.get(finding.sourceId) ?? [];
+          list.push({ ...finding, code: finding.code });
+          reusedFindings.set(finding.sourceId, list);
+        }
+      } catch (error) {
+        c.finding(
+          "PREVIOUS_AUDIT_UNAVAILABLE",
+          `Prior conversion findings could not be restored: ${error}`,
         );
+      }
+      return reusedFindings;
     }
+    const initialTarget = new Map<string, string>();
     let resourcePage: PageNode | undefined;
     const pages = new Map<string, PageNode>();
     async function pageFor(p: Sketch): Promise<PageNode> {
@@ -192,6 +210,10 @@ export function startImport(
     }
     function restoreAudits(s: Sketch, node: SceneNode, local = false): void {
       for (const source of walkLayers([s])) {
+        if (!local)
+          report.findings.push(
+            ...(findingsForReusedLayers().get(sourceId(source)) ?? []),
+          );
         const old = index.nodes[sourceId(source)];
         const n = c.nodes.get(sourceId(source));
         const ledger = c.ledger(source);
@@ -445,6 +467,28 @@ export function startImport(
       return node;
     }
     try {
+      const existing = Object.entries(index.nodes),
+        fingerprints = new FingerprintPass();
+      try {
+        for (const [position, [id, m]] of existing.entries()) {
+          if (position % 16 === 0)
+            await c.checkpoint(
+              `Checking existing layers · ${position}/${existing.length}`,
+            );
+          const node = await api.getNodeByIdAsync(m.nodeId);
+          if (node && "visible" in node)
+            initialTarget.set(
+              id,
+              await targetFingerprint(
+                node as SceneNode,
+                m.targetHashVersion ?? 1,
+                fingerprints,
+              ),
+            );
+        }
+      } finally {
+        fingerprints.clear();
+      }
       c.fonts = await api.listAvailableFontsAsync();
       if (c.cancelled) throw new Error("IMPORT_CANCELLED");
       // Validate only replacements used by this file before creating source resources/nodes.
@@ -527,7 +571,14 @@ export function startImport(
       // Auto Layout setters can move a fixed container while recalculating its
       // intrinsic bounds. Restore source placement once ancestor sizing settles.
       // Vector networks normalize their local bounds; their offsets are intentional.
-      for (const source of walkLayers(file.pages)) {
+      const finalSources = walkLayers(file.pages);
+      let finishing = 0;
+      await c.checkpoint("Positioning layers");
+      for (const source of finalSources) {
+        if (++finishing % 32 === 0)
+          await c.checkpoint(
+            `Positioning layers · ${finishing}/${finalSources.length}`,
+          );
         const node = c.nodes.get(sourceId(source));
         if (!node || !mutable.has(sourceId(source)) || node.type === "VECTOR")
           continue;
@@ -541,33 +592,57 @@ export function startImport(
           node.relativeTransform = transform(source);
         }
       }
+      finishing = 0;
+      await c.checkpoint("Finishing masks");
       for (const p of file.pages)
         for (const container of walkLayers(p.layers ?? []))
           if (mutable.has(sourceId(container))) {
+            if (++finishing % 32 === 0)
+              await c.checkpoint(`Finishing masks · ${finishing}`);
             const node = c.nodes.get(sourceId(container));
             if (node && "children" in node && node.type !== "INSTANCE")
               await reconstructMasks(c, container, node);
           }
-      for (const source of walkLayers(file.pages)) {
+      finishing = 0;
+      for (const source of finalSources) {
+        if (++finishing % 32 === 0)
+          await c.checkpoint(
+            `Finishing image masks · ${finishing}/${finalSources.length}`,
+          );
         const node = c.nodes.get(sourceId(source));
         if (node && !preservedIds.has(sourceId(source)))
           await applyOpacityMask(c, source, node);
       }
+      await c.checkpoint("Binding tokens");
       await applyTokenBindings(c, preservedIds);
       // Token bindings and Symbol content overrides can affect final text ranges.
       // Reconcile mutable masters/layers first, then their actual instance descendants.
+      finishing = 0;
+      await c.checkpoint("Linking text styles");
       for (const [id, node] of c.nodes) {
+        if (++finishing % 32 === 0)
+          await c.checkpoint(
+            `Linking text styles · ${finishing}/${c.nodes.size}`,
+          );
         const source = sourceById.get(id);
         if (source && mutable.has(id) && node.type === "TEXT")
           await reconcileTextStyleBindings(c, source, node);
       }
+      finishing = 0;
+      await c.checkpoint("Linking Symbol text styles");
       for (const [id, node] of c.nodes) {
+        if (++finishing % 32 === 0)
+          await c.checkpoint(
+            `Linking Symbol text styles · ${finishing}/${c.nodes.size}`,
+          );
         const source = sourceById.get(id);
         if (source && mutable.has(id) && node.type === "INSTANCE")
           for (const text of instanceTextSources(node, source))
             await reconcileTextStyleBindings(c, text.source, text.node, source);
       }
+      await c.checkpoint("Linking prototypes");
       await applyPrototypes(c, mutable);
+      await c.checkpoint("Checking resources");
       await validateImport(c, scope);
       const live = new Set(walkLayers(file.pages).map(sourceId));
       for (const [id, m] of Object.entries(index.nodes))
@@ -578,15 +653,32 @@ export function startImport(
             undefined,
             id,
           );
-      for (const [id, node] of c.nodes) {
-        const source = sourceById.get(id);
-        if (source && !node.removed) {
-          if (!preservedIds.has(id))
-            index.nodes[id] = await mapping(node, source, c.conversionHash);
-          const ledger = c.ledgers.get(id);
-          if (ledger) writeData(node, "audit", ledger.finalize());
+      finishing = 0;
+      await c.checkpoint("Saving layer metadata");
+      const savedFingerprints = new FingerprintPass();
+      try {
+        for (const [id, node] of c.nodes) {
+          if (++finishing % 16 === 0)
+            await c.checkpoint(
+              `Saving layer metadata · ${finishing}/${c.nodes.size}`,
+            );
+          const source = sourceById.get(id);
+          if (source && !node.removed) {
+            if (!preservedIds.has(id))
+              index.nodes[id] = await mapping(
+                node,
+                source,
+                c.conversionHash,
+                savedFingerprints,
+              );
+            const ledger = c.ledgers.get(id);
+            if (ledger) writeData(node, "audit", ledger.finalize());
+          }
         }
+      } finally {
+        savedFingerprints.clear();
       }
+      await c.checkpoint("Saving document metadata");
       const docSource = {
         ...input.document,
         _class: "document",
@@ -628,27 +720,67 @@ export function startImport(
       } catch (error) {
         c.finding("LEGACY_STYLE_CLEANUP", String(error));
       }
+      let cleanedOwnedNodes = false;
       try {
         for (const obsolete of c.cleanup)
-          if (!obsolete.removed) obsolete.remove();
+          if (!obsolete.removed) {
+            obsolete.remove();
+            cleanedOwnedNodes = true;
+          }
       } catch (error) {
         c.finding("OWNED_NODE_CLEANUP", String(error));
       }
       // Empty owned wrappers are safe to remove only once all imported mutations commit.
       try {
-        for (const page of pages.values())
-          for (const wrapper of page.findAll(
-            (n) =>
-              n.type === "FRAME" &&
-              n.getPluginData("sketch2figma:wrapper") === "mask" &&
-              n.getPluginData("sketch2figma:documentId") === file.documentId &&
-              n.findAll(
-                (child) => !!child.getPluginData("sketch2figma:sourceId"),
-              ).length === 0,
-          ))
-            wrapper.remove();
+        const removed = await cleanupMaskWrappers(
+          pages.values(),
+          file.documentId,
+          (visited) =>
+            c.progress(
+              c.processed.size,
+              "Cleaning mask wrappers",
+              `Cleaning mask wrappers · ${visited}`,
+            ),
+        );
+        cleanedOwnedNodes ||= removed > 0;
       } catch (e) {
         c.finding("WRAPPER_CLEANUP", String(e));
+      }
+      // Committed helper removal changes ancestor and instance fingerprints.
+      // Store the final scene, otherwise the next import mistakes our cleanup
+      // for a local edit and silently preserves stale imported content.
+      if (cleanedOwnedNodes) {
+        const finalFingerprints = new FingerprintPass();
+        try {
+          let saved = 0;
+          for (const [id, node] of c.nodes) {
+            if (!node.removed && !preservedIds.has(id) && index.nodes[id])
+              index.nodes[id].targetHash = await targetFingerprint(
+                node,
+                2,
+                finalFingerprints,
+              );
+            if (++saved % 64 === 0) {
+              c.progress(
+                c.processed.size,
+                "Saving final sync state",
+                `Saving final sync state · ${saved}/${c.nodes.size}`,
+              );
+              await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+          }
+          writeIndex(api, index);
+        } catch (error) {
+          c.finding(
+            "SYNC_INDEX_REFRESH",
+            String(error),
+            undefined,
+            undefined,
+            "error",
+          );
+        } finally {
+          finalFingerprints.clear();
+        }
       }
       report.sourceMetadataPreserved = true;
       report.state = "complete";
@@ -694,9 +826,25 @@ export function startImport(
     for (const source of walkLayers(input.pages))
       if (!c.ledgers.has(sourceId(source))) c.ledger(source, false);
     c.finish();
+    // Revalidated findings can also have been restored with unchanged layers.
+    // Keep conversion failures visible without duplicating identical notices.
+    const findingKeys = new Set<string>();
+    report.findings = report.findings.filter((finding) => {
+      const key = JSON.stringify([
+        finding.code,
+        finding.sourceId,
+        finding.path,
+        finding.severity,
+        finding.resource,
+        finding.message,
+      ]);
+      if (findingKeys.has(key)) return false;
+      findingKeys.add(key);
+      return true;
+    });
     finishReport(report);
     try {
-      writeReport(api.root, report);
+      await writeReport(api.root, report);
     } catch (error) {
       c.finding(
         "AUDIT_STORAGE",

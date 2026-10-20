@@ -51,7 +51,7 @@ export class ImportContext {
     readonly report: ConversionReport,
     readonly index: ImportIndex,
     readonly journal: MutationJournal,
-    readonly progress: (done: number, name: string) => void,
+    readonly progress: (done: number, name: string, phase?: string) => void,
   ) {
     this.conversionHash = fingerprint({
       revision: CONVERTER_REVISION,
@@ -153,6 +153,13 @@ export class ImportContext {
     if (this.cancelled) throw new Error("IMPORT_CANCELLED");
     this.progress(this.processed.size, s.name ?? s._class);
     await new Promise((r) => setTimeout(r, 0));
+    if (this.cancelled) throw new Error("IMPORT_CANCELLED");
+  }
+  /** Finishing work must yield too: resolved API promises alone can starve Cancel. */
+  async checkpoint(phase: string): Promise<void> {
+    if (this.cancelled) throw new Error("IMPORT_CANCELLED");
+    this.progress(this.processed.size, phase, phase);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     if (this.cancelled) throw new Error("IMPORT_CANCELLED");
   }
   finish(): void {
